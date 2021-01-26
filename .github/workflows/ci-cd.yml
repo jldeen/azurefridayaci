@@ -157,6 +157,7 @@ jobs:
   # Possibly setup release in ADO with gates and approvals
   deploy:
     runs-on: ubuntu-latest
+    needs: build
     steps:
       - name: "Get ACR and App Insights Information"
         run: |
