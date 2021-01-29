@@ -14,6 +14,6 @@ RUN ACCEPT_EULA=Y apt-get install -y msodbcsql17 unixodbc-dev mssql-tools
 COPY . /app
 WORKDIR /app
 RUN pip3 install -r requirements.txt
-CMD ["sh", "-c", "python3 sql_api.py"]
+CMD ["sh", "-c", "python3 sql_dash.py"]
 
 EXPOSE 8080

@@ -1,0 +1,390 @@
+###############################################
+# Azure Container Instances with Azure CLI
+#
+# Creates for Azure Friday demo with ACI
+#
+# Jose Moreno, January 2021
+###############################################
+
+# See https://github.com/erjosito/whoami/blob/master/lab-guides/aci.md
+# Can be combined with the SSL sidecar
+# Additionally with managed identity
+
+# Variables
+rg=acilab
+location=westeurope
+aci_name_prefix=sqlapi
+vnet_name=acivnet
+vnet_prefix=192.168.0.0/16
+appgw_subnet_name=appgw
+appgw_subnet_prefix=192.168.1.0/24
+aci_subnet_name=aci
+aci_subnet_prefix=192.168.2.0/24
+sql_subnet_name=sql
+sql_subnet_prefix=192.168.3.0/24
+
+# Create test RG and Vnet
+az group create -n $rg -l $location
+az network vnet create -n $vnet_name -g $rg --address-prefix $vnet_prefix
+az network vnet subnet create --vnet-name $vnet_name -g $rg -n $appgw_subnet_name --address-prefix $appgw_subnet_prefix
+az network vnet subnet create --vnet-name $vnet_name -g $rg -n $aci_subnet_name --address-prefix $aci_subnet_prefix
+az network vnet subnet create --vnet-name $vnet_name -g $rg -n $sql_subnet_name --address-prefix $sql_subnet_prefix
+
+# Create database
+sql_server_name=sqlserver$RANDOM
+sql_db_name=mydb
+sql_username=azure
+sql_password=Microsoft123!
+az sql server create -n $sql_server_name -g $rg -l $location --admin-user $sql_username --admin-password $sql_password
+sql_server_fqdn=$(az sql server show -n $sql_server_name -g $rg -o tsv --query fullyQualifiedDomainName)
+az sql db create -n $sql_db_name -s $sql_server_name -g $rg -e Basic -c 5 --no-wait
+
+# Create SQL Server private endpoint
+sql_endpoint_name=sqlep
+sql_server_id=$(az sql server show -n $sql_server_name -g $rg -o tsv --query id)
+az network vnet subnet update -n $sql_subnet_name -g $rg --vnet-name $vnet_name --disable-private-endpoint-network-policies true
+az network private-endpoint create -n $sql_endpoint_name -g $rg \
+  --vnet-name $vnet_name --subnet $sql_subnet_name \
+  --private-connection-resource-id $sql_server_id --group-ids sqlServer --connection-name sqlConnection
+
+# Get endpoint's private IP address
+sql_nic_id=$(az network private-endpoint show -n $sql_endpoint_name -g $rg --query 'networkInterfaces[0].id' -o tsv)
+sql_endpoint_ip=$(az network nic show --ids $sql_nic_id --query 'ipConfigurations[0].privateIpAddress' -o tsv) && echo $sql_endpoint_ip
+
+# Create Azure private DNS zone for private link and required A record
+dns_zone_name=privatelink.database.windows.net
+az network private-dns zone create -n $dns_zone_name -g $rg 
+az network private-dns link vnet create -g $rg -z $dns_zone_name -n myDnsLink --virtual-network $vnet_name --registration-enabled false
+az network private-dns record-set a create -n $sql_server_name -z $dns_zone_name -g $rg
+az network private-dns record-set a add-record --record-set-name $sql_server_name -z $dns_zone_name -g $rg -a $sql_endpoint_ip
+
+# Create SP (used later by init container to update private DNS zone)
+scope=$(az group show -n $rg --query id -o tsv)
+new_sp=$(az ad sp create-for-rbac --scopes $scope --role Contributor --name acilab)
+sp_appid=$(echo $new_sp | jq -r '.appId') && echo $sp_appid
+sp_tenant=$(echo $new_sp | jq -r '.tenant') && echo $sp_tenant
+sp_password=$(echo $new_sp | jq -r '.password')
+
+# Create Azure DNS private zone for ACIs and link it to Vnet
+dns_zone_name=contoso.com
+az network private-dns zone create -n $dns_zone_name -g $rg 
+az network private-dns link vnet create -g $rg -z $dns_zone_name -n contoso --virtual-network $vnet_name --registration-enabled false
+
+# Get network profile ID
+# Network profiles are created when a container is created, hence we create and delete a dummy container to the vnet first
+vnet_id=$(az network vnet show -n $vnet_name -g $rg --query id -o tsv)
+subnet_id=$(az network vnet subnet show -n $aci_subnet_name --vnet-name $vnet_name -g $rg --query id -o tsv)
+az container create -n dummy -g $rg --image mcr.microsoft.com/azuredocs/aci-helloworld --ip-address private --ports 80 --vnet $vnet_id --subnet $subnet_id
+az container delete -n dummy -g $rg -y
+nw_profile_id=$(az network profile list -g $rg --query '[0].id' -o tsv) && echo $nw_profile_id
+
+# Create script for init container in an AzFiles share
+storage_account_name="acilab$RANDOM"
+az storage account create -n $storage_account_name -g $rg --sku Standard_LRS --kind StorageV2
+storage_account_key=$(az storage account keys list --account-name $storage_account_name -g $rg --query '[0].value' -o tsv)
+az storage share create --account-name $storage_account_name --account-key $storage_account_key --name initscript
+init_script_filename=init.sh
+init_script_path=/tmp/
+cat <<EOF > ${init_script_path}${init_script_filename}
+echo "DEBUG: Environment variables:"
+printenv
+echo "Logging into Azure..."
+az login --service-principal -u \$SP_APPID -p \$SP_PASSWORD --tenant \$SP_TENANT
+echo "Finding out IP address..."
+my_private_ip=\$(az container show -n \$ACI_NAME -g \$RG --query 'ipAddress.ip' -o tsv) && echo \$my_private_ip
+echo "Creating DNS record..."
+az network private-dns record-set a create -n \$HOSTNAME -z \$DNS_ZONE_NAME -g \$RG
+az network private-dns record-set a add-record --record-set-name \$HOSTNAME -z \$DNS_ZONE_NAME -g \$RG -a \$my_private_ip
+EOF
+az storage file upload --account-name $storage_account_name --account-key $storage_account_key -s initscript --source ${init_script_path}${init_script_filename}
+
+# Create private root CA
+openssl genrsa -out /tmp/rootCA.key 4096
+openssl req -x509 -new -nodes -key /tmp/rootCA.key -sha256 -days 1024 -subj "/C=US/ST=WA/O=Contoso/CN=root.contoso.com" -out /tmp/rootCA.crt
+# Create wildcard self-signed cert
+openssl genrsa -out /tmp/contoso.com.key 2048
+openssl req -new -sha256 -key /tmp/contoso.com.key -subj "/C=US/ST=WA/O=Contoso, Inc./CN=*.contoso.com" -out /tmp/contoso.com.csr
+openssl x509 -req -in /tmp/contoso.com.csr -CA /tmp/rootCA.crt -CAkey /tmp/rootCA.key -CAcreateserial -out /tmp/contoso.com.crt -days 500 -sha256
+# openssl req -new -newkey rsa:2048 -nodes -keyout ssl.key -out ssl.csr -subj "/C=US/ST=WA/L=Redmond/O=AppDev/OU=IT/CN=*.contoso.com"
+# openssl x509 -req -days 365 -in ssl.csr -signkey ssl.key -out ssl.crt
+cat /tmp/contoso.com.key /tmp/contoso.com.crt /tmp/rootCA.crt >/tmp/contoso.com.bundle.pem
+cert_passphrase='Microsoft123!'
+openssl pkcs12 -export -nodes -in /tmp/contoso.com.bundle.pem -out "/tmp/contoso.com.bundle.pfx" -passout "pass:$cert_passphrase"
+
+# Create nginx.conf for SSL
+nginx_config_file=/tmp/nginx.conf
+cat <<EOF > $nginx_config_file
+user nginx;
+worker_processes auto;
+events {
+  worker_connections 1024;
+}
+pid        /var/run/nginx.pid;
+http {
+    server {
+        listen [::]:443 ssl;
+        listen 443 ssl;
+        server_name localhost;
+        ssl_protocols              TLSv1.2;
+        ssl_ciphers                ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES256-GCM-SHA384:DHE-RSA-AES128-GCM-SHA256:DHE-DSS-AES128-GCM-SHA256:kEDH+AESGCM:ECDHE-RSA-AES128-SHA256:ECDHE-ECDSA-AES128-SHA256:ECDHE-RSA-AES128-SHA:ECDHE-ECDSA-AES128-SHA:ECDHE-RSA-AES256-SHA384:ECDHE-ECDSA-AES256-SHA384:ECDHE-RSA-AES256-SHA:ECDHE-ECDSA-AES256-SHA:DHE-RSA-AES128-SHA256:DHE-RSA-AES128-SHA:DHE-DSS-AES128-SHA256:DHE-RSA-AES256-SHA256:DHE-DSS-AES256-SHA:DHE-RSA-AES256-SHA:AES128-GCM-SHA256:AES256-GCM-SHA384:ECDHE-RSA-RC4-SHA:ECDHE-ECDSA-RC4-SHA:AES128:AES256:RC4-SHA:HIGH:!aNULL:!eNULL:!EXPORT:!DES:!3DES:!MD5:!PSK;
+        ssl_prefer_server_ciphers  on;
+        ssl_session_cache    shared:SSL:10m; # a 1mb cache can hold about 4000 sessions, so we can hold 40000 sessions
+        ssl_session_timeout  24h;
+        keepalive_timeout 75; # up from 75 secs default
+        add_header Strict-Transport-Security 'max-age=31536000; includeSubDomains';
+        ssl_certificate      /etc/nginx/ssl.crt;
+        ssl_certificate_key  /etc/nginx/ssl.key;
+        location / {
+            proxy_pass http://127.0.0.1:80 ;
+            proxy_set_header Connection "";
+            proxy_set_header Host \$host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            # proxy_set_header X-Forwarded-For \$remote_addr;
+            proxy_buffer_size          128k;
+            proxy_buffers              4 256k;
+            proxy_busy_buffers_size    256k;
+        }
+        location /api/ {
+            proxy_pass http://127.0.0.1:8080 ;
+            proxy_set_header Connection "";
+            proxy_set_header Host \$host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            # proxy_set_header X-Forwarded-For \$remote_addr;
+            proxy_buffer_size          128k;
+            proxy_buffers              4 256k;
+            proxy_busy_buffers_size    256k;
+        }
+    }
+}
+EOF
+
+# Encode to Base64
+nginx_conf=$(cat $nginx_config_file | base64)
+ssl_crt=$(cat /tmp/contoso.com.crt | base64)
+ssl_key=$(cat /tmp/contoso.com.key | base64)
+
+# Function to deploy an ACI to the vnet (we will deploy two of them)
+function deploy_aci() {
+  # ACI name must be provided as argument
+  aci_name=$1
+  container_image=$2
+  # Create YAML
+  aci_yaml_file=/tmp/acilab.yaml
+  cat <<EOF > $aci_yaml_file
+  apiVersion: 2019-12-01
+  location: westus
+  name: $aci_name
+  properties:
+    networkProfile:
+      id: $nw_profile_id
+    initContainers:
+    - name: azcli
+      properties:
+        image: microsoft/azure-cli:latest
+        command:
+        - "/bin/sh"
+        - "-c"
+        - "/mnt/init/$init_script_filename"
+        environmentVariables:
+        - name: RG
+          value: $rg
+        - name: SP_APPID
+          value: $sp_appid
+        - name: SP_PASSWORD
+          secureValue: $sp_password
+        - name: SP_TENANT
+          value: $sp_tenant
+        - name: DNS_ZONE_NAME
+          value: $dns_zone_name
+        - name: HOSTNAME
+          value: $aci_name
+        - name: ACI_NAME
+          value: $aci_name
+        volumeMounts:
+        - name: initscript
+          mountPath: /mnt/init/
+    containers:
+    - name: nginx
+      properties:
+        image: nginx
+        ports:
+        - port: 443
+          protocol: TCP
+        resources:
+          requests:
+            cpu: 1.0
+            memoryInGB: 1.5
+        volumeMounts:
+        - name: nginx-config
+          mountPath: /etc/nginx
+    - name: web
+      properties:
+        image: erjosito/web:1.0
+        environmentVariables:
+        - name: API_URL
+          value: 127.0.0.1:8080
+        ports:
+        - port: 80
+          protocol: TCP
+        resources:
+          requests:
+            cpu: 0.5
+            memoryInGB: 0.5
+    - name: sqlapi
+      properties:
+        image: $container_image
+        environmentVariables:
+        - name: SQL_SERVER_FQDN
+          value: $sql_server_fqdn
+        - name: SQL_SERVER_USERNAME
+          value: $sql_username
+        - name: SQL_SERVER_DB
+          value: $sql_db_name
+        - name: SQL_SERVER_PASSWORD
+          secureValue: $sql_password
+        ports:
+        - port: 8080
+          protocol: TCP
+        resources:
+          requests:
+            cpu: 1.0
+            memoryInGB: 1
+        volumeMounts:
+    volumes:
+    - secret:
+        ssl.crt: "$ssl_crt"
+        ssl.key: "$ssl_key"
+        nginx.conf: "$nginx_conf"
+      name: nginx-config
+    - name: initscript
+      azureFile:
+        readOnly: false
+        shareName: initscript
+        storageAccountName: $storage_account_name
+        storageAccountKey: $storage_account_key
+    ipAddress:
+      ports:
+      - port: 443
+        protocol: TCP
+      type: Private
+    osType: Linux
+  tags: null
+  type: Microsoft.ContainerInstance/containerGroups
+EOF
+
+  # Deploy ACI
+  az container create -g $rg --file $aci_yaml_file --no-wait
+}
+
+# Create dashboard app
+dash_name=dash
+az container create -n $dash_name -g $rg --image erjosito/sqldash:1.0 --vnet $vnet_id --subnet $subnet_id --ip-address private --ports 8050  \
+  -e "SQL_SERVER_FQDN=${sql_server_fqdn}" "SQL_SERVER_USERNAME=${sql_username}" "SQL_SERVER_PASSWORD=${sql_password}" "SQL_SERVER_DB=${sql_db_name}"
+dash_ip=$(az container show -n $dash_name -g $rg --query 'ipAddress.ip' -o tsv) && echo $dash_ip
+
+# Application gateway
+appgw_name=appgw
+appgw_pip_name=${appgw_name}-pip
+appgw_pip_dns=${appgw_name}$RANDOM
+allocation_method=Static
+az network public-ip create -g $rg -n $appgw_pipname --sku Standard --allocation-method $allocation_method --dns-name $appgw_pip_dns
+appgw_fqdn=$(az network public-ip show -g $rg -n $appgw_pipname --query dnsSettings.fqdn -o tsv)
+az network application-gateway create -g $rg -n $appgw_name --min-capacity 1 --max-capacity 2 --sku Standard_v2 \
+    --frontend-port 8050 --routing-rule-type basic \
+    --http-settings-port 8050 --http-settings-protocol Http \
+    --public-ip-address $appgw_pip_name --vnet-name $vnet_name --subnet $appgw_subnet_name \
+    --servers "$dash_ip" --no-wait
+echo "You can browse to http://${appgw_fqdn}:8050 for the demo dashboard"
+
+# Create listener and backend for ACI (production)
+az network application-gateway address-pool create -n acipool -g $rg --gateway-name $appgw_name \
+  --servers ${aci_name_prefix}-01.contoso.com ${aci_name_prefix}-02.contoso.com ${aci_name_prefix}-03.contoso.com
+az network application-gateway probe create -g $rg --gateway-name $appgw_name \
+  --name aciprobe --protocol Https --host-name-from-http-settings --match-status-codes 200-399 --port 443 --path /api/healthcheck
+az network application-gateway root-cert create -g $rg --gateway-name $appgw_name \
+  --name contosoroot --cert-file /tmp/rootCA.crt
+az network application-gateway http-settings create -g $rg --gateway-name $appgw_name --port 443 \
+  --name acisettings --protocol https --host-name-from-backend-pool --probe aciprobe --root-certs contosoroot
+az network application-gateway ssl-cert create -g $rg --gateway-name $appgw_name -n contoso \
+  --cert-file /tmp/contoso.com.bundle.pfx --cert-password $cert_passphrase
+frontend_name=$(az network application-gateway frontend-ip list -g $rg --gateway-name $appgw_name --query '[0].name' -o tsv)
+az network application-gateway frontend-port create -n acifrontendport -g $rg --gateway-name $appgw_name --port 443
+az network application-gateway http-listener create -n acilistener -g $rg --gateway-name $appgw_name \
+  --frontend-port acifrontendport --frontend-ip $frontend_name --ssl-cert contoso
+az network application-gateway rule create -g $rg --gateway-name $appgw_name -n acirule \
+  --http-listener acilistener --rule-type Basic --address-pool acipool --http-settings acisettings
+
+# Create listener and backend for ACI (dev)
+az network application-gateway address-pool create -n acidevpool -g $rg --gateway-name $appgw_name \
+  --servers ${aci_name_prefix}-dev-01.contoso.com ${aci_name_prefix}-dev-02.contoso.com ${aci_name_prefix}-dev-03.contoso.com
+az network application-gateway frontend-port create -n acidevfrontendport -g $rg --gateway-name $appgw_name --port 8443
+az network application-gateway http-listener create -n acidevlistener -g $rg --gateway-name $appgw_name \
+  --frontend-port acidevfrontendport --frontend-ip $frontend_name --ssl-cert contoso
+az network application-gateway rule create -g $rg --gateway-name $appgw_name -n acidevrule \
+  --http-listener acidevlistener --rule-type Basic --address-pool acidevpool --http-settings acisettings
+
+# Provision prod ACIs
+prod_image=erjosito/sqlapi:1.0
+deploy_aci ${aci_name_prefix}-01 $prod_image
+deploy_aci ${aci_name_prefix}-02 $prod_image
+echo "You can verify the production environment under https://${appgw_fqdn}/api/healthcheck once the containers are successfully provisioned"
+
+# Verify that the containers are successfully provisioned
+az container list -g $rg -o table
+curl -k "https://${appgw_fqdn}/api/healthcheck"
+
+# Initialize the database (this has to be done only once in the database to create a table)
+curl -k "https://${appgw_fqdn}/api/sqlsrcipinit"
+
+# Generate some production traffic
+for i in {1..30}
+do
+   curl -k "https://${appgw_fqdn}/api/sqlsrciplog"
+   sleep 1
+done
+# While this is running, have a look at the dashboard, you should see the IP addresses of the container generating traffic
+
+# Change something in the code, create a dev image and provision dev containers
+dev_image=erjosito/sqlapi:1.0  # Using the same image here
+deploy_aci ${aci_name_prefix}-dev-01 $dev_image
+deploy_aci ${aci_name_prefix}-dev-02 $dev_image
+echo "You can verify the staging environment under https://${appgw_fqdn}:8443/api/healthcheck"
+
+# Verify that the containers are successfully provisioned
+az container list -g $rg -o table
+
+# After having validated the dev image, promote the image to production
+prod_image=erjosito/sqlapi:1.0
+deploy_aci ${aci_name_prefix}-01 $prod_image
+deploy_aci ${aci_name_prefix}-02 $prod_image
+echo "You can verify the production environment under https://${appgw_fqdn}/api/healthcheck"
+
+# Verify that the containers are successfully provisioned
+az container list -g $rg -o table
+
+# Generate some production traffic
+for i in {1..120}
+do
+   curl -k https://${appgw_fqdn}/api/sqlsrciplog
+   sleep 1
+done
+# While this is running, have a look at the dashboard, you should see the IP addresses of the new containers taking the traffic load
+
+# Diagnostic and troubleshooting commands
+more $aci_yaml_file
+az container list -g $rg -o table
+az container logs -n ${aci_name_prefix}-03 -g $rg --container-name azcli
+az network private-dns record-set a list -z $dns_zone_name -g $rg
+az network application-gateway show-backend-health -g $rg -n $appgw_name
+# Dashboard page
+az container logs -n $dash_name -g $rg
+az container restart -n $dash_name -g $rg
+az container delete -n $dash_name -g $rg -y
+az container create -n $dash_name -g $rg --image erjosito/sqldash:1.0 --vnet $vnet_id --subnet $subnet_id --ip-address private --ports 8050  \
+  -e "SQL_SERVER_FQDN=${sql_server_fqdn}" "SQL_SERVER_USERNAME=${sql_username}" "SQL_SERVER_PASSWORD=${sql_password}" "SQL_SERVER_DB=${sql_db_name}" --no-wait
+dash_ip=$(az container show -n $dash_name -g $rg --query 'ipAddress.ip' -o tsv) && echo $dash_ip
+az network application-gateway address-pool show -n appGatewayBackendPool -g $rg --gateway-name $appgw_name --query backendAddresses
+az network application-gateway address-pool update -n appGatewayBackendPool -g $rg --gateway-name $appgw_name --servers $dash_ip
+
+# Cleanup everything
+# az group delete -n $rg -y --no-wait
