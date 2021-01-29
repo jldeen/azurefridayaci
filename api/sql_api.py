@@ -6,6 +6,7 @@ import warnings
 import requests
 import dns.resolver
 import psycopg2
+import datetime
 
 from flask import Flask
 from flask import request
@@ -37,12 +38,20 @@ def get_sqlsrcip(cx):
 def get_sqlquery(cx, query):
     cursor = cx.cursor()
     cursor.execute(query)
-    rows = cursor.fetchall()
-    app.logger.info('Query "' + query + '" has returned ' + str(len(rows)) + ' rows')
-    app.logger.info('Variable type for first row: ' + str(type(rows[0])))
-    if len(rows) > 0:
-        return rows[0][0]
-    else:
+    try:
+        rows = cursor.fetchall()
+        app.logger.info('Query "' + query + '" has returned ' + str(len(rows)) + ' rows')
+        app.logger.info('Variable type for first row: ' + str(type(rows[0])))
+        if len(rows) > 0:
+            return rows[0][0]
+        else:
+            return None
+    except:
+        try:
+            cursor.commit()
+        except:
+            pass
+        app.logger.info('Query "' + query + '" has returned no rows')
         return None
 
 def get_variable_value(variable_name):
@@ -147,6 +156,8 @@ def send_sql_query(sql_server_fqdn = None, sql_server_db = None, sql_server_user
             # sql_output = get_sqlversion(cx)
             # sql_output = get_sqlsrcip(cx)
             sql_output = get_sqlquery(cx, sql_query)
+            app.logger.info('Closing SQL connection...')
+            cx.close()
             return str(sql_output)
         except Exception as e:
             # app.logger.error('Error sending query to the database')
@@ -367,6 +378,93 @@ def sqlsrcip():
         except Exception as e:
           return jsonify(str(e))
 
+@app.route("/api/sqlsrcipinit", methods=['GET'])
+def sqlsrcipinit():
+    if request.method == 'GET':
+        try:
+            # Get variables from the request
+            sql_server_fqdn = request.args.get('SQL_SERVER_FQDN')
+            sql_server_db = request.args.get('SQL_SERVER_DB')
+            sql_server_username = request.args.get('SQL_SERVER_USERNAME')
+            sql_server_password = request.args.get('SQL_SERVER_PASSWORD')
+            use_ssl = request.args.get('USE_SSL')
+            if request.args.get('SQL_ENGINE') == None:
+                sql_engine = get_variable_value('SQL_ENGINE')
+                if sql_engine == None:
+                    sql_engine = 'sqlserver'
+            else:
+                sql_engine = request.args.get('SQL_ENGINE')
+            # Select the right query for the src IP depending on the DB engine
+            if sql_engine == 'sqlserver':
+                sql_query = 'CREATE TABLE srciplog (ip varchar(15), timestamp varchar(30));'
+            elif sql_engine == 'mysql':
+                sql_query = 'CREATE TABLE srciplog (ip varchar(15), timestamp varchar(30));'
+            elif sql_engine == 'postgres':
+                sql_query = 'CREATE TABLE srciplog (ip varchar(15), timestamp varchar(30));'
+
+            # Send query to retrieve source IP
+            app.logger.info('Values retrieved from the query: {0}, db {1}: credentials {2}/{3}'.format(str(sql_server_fqdn), str(sql_server_db), str(sql_server_username), str(sql_server_password)))
+            sql_output = send_sql_query(sql_server_fqdn=sql_server_fqdn, sql_server_db=sql_server_db, sql_server_username=sql_server_username, sql_server_password=sql_server_password, sql_query=sql_query, sql_engine=sql_engine)
+
+            msg = {
+            'table_created': 'srciplog'
+            }          
+            return jsonify(msg)
+        except Exception as e:
+          return jsonify(str(e))
+
+
+@app.route("/api/sqlsrciplog", methods=['GET'])
+def sqlsrciplog():
+    if request.method == 'GET':
+        try:
+            # Get variables from the request
+            sql_server_fqdn = request.args.get('SQL_SERVER_FQDN')
+            sql_server_db = request.args.get('SQL_SERVER_DB')
+            sql_server_username = request.args.get('SQL_SERVER_USERNAME')
+            sql_server_password = request.args.get('SQL_SERVER_PASSWORD')
+            use_ssl = request.args.get('USE_SSL')
+            if request.args.get('SQL_ENGINE') == None:
+                sql_engine = get_variable_value('SQL_ENGINE')
+                if sql_engine == None:
+                    sql_engine = 'sqlserver'
+            else:
+                sql_engine = request.args.get('SQL_ENGINE')
+
+            # Select the right query for the src IP depending on the DB engine
+            if sql_engine == 'sqlserver':
+                sql_query = 'SELECT CONNECTIONPROPERTY(\'client_net_address\')'
+            elif sql_engine == 'mysql':
+                sql_query = 'SELECT host FROM information_schema.processlist WHERE ID=connection_id();'
+            elif sql_engine == 'postgres':
+                sql_query = 'SELECT inet_client_addr ();'
+            # Send query to retrieve source IP
+            app.logger.info('Values retrieved from the query: {0}, db {1}: credentials {2}/{3}'.format(str(sql_server_fqdn), str(sql_server_db), str(sql_server_username), str(sql_server_password)))
+            src_ip_address = str(send_sql_query(sql_server_fqdn=sql_server_fqdn, sql_server_db=sql_server_db, sql_server_username=sql_server_username, sql_server_password=sql_server_password, sql_query=sql_query, sql_engine=sql_engine))
+
+            # Send query to record IP in the srciplog table
+            timestamp = str(datetime.datetime.utcnow())
+            if sql_engine == 'sqlserver':
+                sql_query = "INSERT INTO srciplog (ip, timestamp) VALUES ('{0}', '{1}');".format(src_ip_address, timestamp)
+            elif sql_engine == 'mysql':
+                sql_query = "INSERT INTO srciplog (ip, timestamp) VALUES ('{0}', '{1}');".format(src_ip_address, timestamp)
+            elif sql_engine == 'postgres':
+                sql_query = "INSERT INTO srciplog (ip, timestamp) VALUES ('{0}', '{1}');".format(src_ip_address, timestamp)
+            # Send query to retrieve source IP
+            app.logger.info('Values retrieved from the query: {0}, db {1}: credentials {2}/{3}'.format(str(sql_server_fqdn), str(sql_server_db), str(sql_server_username), str(sql_server_password)))
+            sql_output = send_sql_query(sql_server_fqdn=sql_server_fqdn, sql_server_db=sql_server_db, sql_server_username=sql_server_username, sql_server_password=sql_server_password, sql_query=sql_query, sql_engine=sql_engine)
+
+            msg = {
+            'srciplog': {
+                'ip': src_ip_address,
+                'timestamp': timestamp
+                }
+            }          
+            return jsonify(msg)
+        except Exception as e:
+          return jsonify(str(e))
+
+
 # Flask route to return the number PI
 @app.route("/api/pi", methods=['GET'])
 def pi():
@@ -515,6 +613,7 @@ def mysql():
             cursor = db.cursor()
             cursor.execute("SELECT VERSION()")
             data = cursor.fetchone()
+            app.logger.info('Closing SQL connection...') 
             db.close()
             msg = {
                 'sql_output': str(data)
