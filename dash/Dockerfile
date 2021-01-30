@@ -16,4 +16,4 @@ WORKDIR /app
 RUN pip3 install -r requirements.txt
 CMD ["sh", "-c", "python3 sql_dash.py"]
 
-EXPOSE 8080
+EXPOSE 8050

@@ -10,7 +10,7 @@
 # - ACI deployment via YAML
 # - App GW used to frontend containers, with end-to-end SSL
 #
-# Tested with zsh
+# Tested with zsh (if run with bash there are probably A LOT of missing "")
 #
 # Jose Moreno, January 2021
 ###############################################
@@ -93,18 +93,18 @@ sql_server_id=$(az sql server show -n $sql_server_name -g $rg -o tsv --query id)
 az network vnet subnet update -n $sql_subnet_name -g $rg --vnet-name $vnet_name --disable-private-endpoint-network-policies true
 az network private-endpoint create -n $sql_endpoint_name -g $rg \
   --vnet-name $vnet_name --subnet $sql_subnet_name \
-  --private-connection-resource-id $sql_server_id --group-ids sqlServer --connection-name sqlConnection
+  --private-connection-resource-id $sql_server_id --group-id sqlServer --connection-name sqlConnection
 
 # Get endpoint's private IP address
 sql_nic_id=$(az network private-endpoint show -n $sql_endpoint_name -g $rg --query 'networkInterfaces[0].id' -o tsv)
 sql_endpoint_ip=$(az network nic show --ids $sql_nic_id --query 'ipConfigurations[0].privateIpAddress' -o tsv) && echo $sql_endpoint_ip
 
 # Create Azure private DNS zone for private link and required A record
-dns_zone_name=privatelink.database.windows.net
-az network private-dns zone create -n $dns_zone_name -g $rg 
-az network private-dns link vnet create -g $rg -z $dns_zone_name -n myDnsLink --virtual-network $vnet_name --registration-enabled false
-az network private-dns record-set a create -n $sql_server_name -z $dns_zone_name -g $rg
-az network private-dns record-set a add-record --record-set-name $sql_server_name -z $dns_zone_name -g $rg -a $sql_endpoint_ip
+plink_dns_zone_name=privatelink.database.windows.net
+az network private-dns zone create -n $plink_dns_zone_name -g $rg 
+az network private-dns link vnet create -g $rg -z $plink_dns_zone_name -n privatelink --virtual-network $vnet_name --registration-enabled false
+az network private-dns record-set a create -n $sql_server_name -z $plink_dns_zone_name -g $rg
+az network private-dns record-set a add-record --record-set-name $sql_server_name -z $plink_dns_zone_name -g $rg -a $sql_endpoint_ip
 
 # Create SP and grant access to RG (used later by init container to update private DNS zone and for ACR pulls)
 scope=$(az group show -n $rg --query id -o tsv)
@@ -113,7 +113,7 @@ sp_appid=$(echo $new_sp | jq -r '.appId') && echo $sp_appid
 sp_tenant=$(echo $new_sp | jq -r '.tenant') && echo $sp_tenant
 sp_password=$(echo $new_sp | jq -r '.password')
 
-# Create Azure DNS private zone for ACIs and link it to Vnet
+# Create Azure private DNS zone for ACIs and link it to Vnet
 dns_zone_name=contoso.com
 az network private-dns zone create -n $dns_zone_name -g $rg 
 az network private-dns link vnet create -g $rg -z $dns_zone_name -n contoso --virtual-network $vnet_name --registration-enabled false
@@ -123,8 +123,13 @@ az network private-dns link vnet create -g $rg -z $dns_zone_name -n contoso --vi
 vnet_id=$(az network vnet show -n $vnet_name -g $rg --query id -o tsv) && echo $vnet_id
 subnet_id=$(az network vnet subnet show -n $aci_subnet_name --vnet-name $vnet_name -g $rg --query id -o tsv) && echo $subnet_id
 az container create -n dummy -g $rg --image mcr.microsoft.com/azuredocs/aci-helloworld --ip-address private --ports 80 --vnet $vnet_id --subnet $subnet_id
+# If the previous command fails with an error, it is no problem, as long as a network profile is created (see below)
 az container delete -n dummy -g $rg -y
 nw_profile_id=$(az network profile list -g $rg --query '[0].id' -o tsv) && echo $nw_profile_id
+if [[ -z "$nw_profile_id" ]]
+then
+    echo "No network profile could be created!!"
+fi
 
 # Create script for init container in an AzFiles share
 storage_account_name="acilab$RANDOM"
@@ -341,18 +346,18 @@ appgw_name=appgw
 appgw_pip_name=${appgw_name}-pip
 appgw_pip_dns=${appgw_name}$RANDOM
 allocation_method=Static
-az network public-ip create -g $rg -n $appgw_pipname --sku Standard --allocation-method $allocation_method --dns-name $appgw_pip_dns
-appgw_fqdn=$(az network public-ip show -g $rg -n $appgw_pipname --query dnsSettings.fqdn -o tsv)
+az network public-ip create -g $rg -n $appgw_pip_name --sku Standard --allocation-method $allocation_method --dns-name $appgw_pip_dns
+appgw_fqdn=$(az network public-ip show -g $rg -n $appgw_pip_name --query dnsSettings.fqdn -o tsv)
 az network application-gateway create -g $rg -n $appgw_name --min-capacity 1 --max-capacity 2 --sku Standard_v2 \
     --frontend-port 8050 --routing-rule-type basic \
     --http-settings-port 8050 --http-settings-protocol Http \
     --public-ip-address $appgw_pip_name --vnet-name $vnet_name --subnet $appgw_subnet_name \
-    --servers "$dash_ip" --no-wait
+    --servers "$dash_ip"
 echo "You can browse to http://${appgw_fqdn}:8050 for the demo dashboard"
 
 # Create listener and backend for ACI (production)
 az network application-gateway address-pool create -n acipool -g $rg --gateway-name $appgw_name \
-  --servers ${aci_name_prefix}-01.contoso.com ${aci_name_prefix}-02.contoso.com ${aci_name_prefix}-03.contoso.com
+  --servers ${aci_name_prefix}-01.contoso.com ${aci_name_prefix}-02.contoso.com ${aci_name_prefix}-03.contoso.com ${aci_name_prefix}-04.contoso.com
 az network application-gateway probe create -g $rg --gateway-name $appgw_name \
   --name aciprobe --protocol Https --host-name-from-http-settings --match-status-codes 200-399 --port 443 --path /api/healthcheck
 az network application-gateway root-cert create -g $rg --gateway-name $appgw_name \
@@ -428,8 +433,8 @@ curl -k "https://${appgw_fqdn}:8443/api/healthcheck"
 
 # After having validated the dev image, promote the image to production
 prod_image_new=${acr_name}.azurecr.io/azurefriday/api:1.1
-deploy_aci ${aci_name_prefix}-01 $prod_image_new
-deploy_aci ${aci_name_prefix}-02 $prod_image_new
+deploy_aci ${aci_name_prefix}-03 $prod_image_new
+deploy_aci ${aci_name_prefix}-04 $prod_image_new
 
 # Verify that the containers are successfully provisioned
 az container list -g $rg -o table
@@ -439,15 +444,13 @@ curl -k "https://${appgw_fqdn}/api/healthcheck"
 # Generate some production traffic
 for i in {1..120}
 do
-   curl -k https://${appgw_fqdn}/api/sqlsrciplog
+   curl -k "https://${appgw_fqdn}/api/sqlsrciplog"
    sleep 1
 done
 
-# Optional: If re-creating containers with the same name does not work, you can create new containers
-#           In this case, you might have to add them to the AppGW backend pool. For example, if you
-#           created sqlapi-04:
-az network application-gateway address-pool update -n acipool -g $rg --gateway-name $appgw_name \
-  --servers ${aci_name_prefix}-01.contoso.com ${aci_name_prefix}-02.contoso.com ${aci_name_prefix}-03.contoso.com ${aci_name_prefix}-04.contoso.com
+# And delete the 2 ACIs with the old image, so that only 3 and 4 remain
+az container delete -n  ${aci_name_prefix}-01 -g $rg -y
+az container delete -n  ${aci_name_prefix}-02 -g $rg -y
 
 # While this is running, have a look at the dashboard, you should see the IP addresses of the new containers taking the traffic load
 
@@ -464,6 +467,8 @@ more $aci_yaml_file
 az container list -g $rg -o table
 # DNS
 az network private-dns record-set a list -z privatelink.database.windows.net -g $rg
+az network private-dns link vnet delete -g $rg -z privatelink.database.windows.net -n privatelink -y
+az network private-dns link vnet create -g $rg -z privatelink.database.windows.net -n privatelink --virtual-network $vnet_name --registration-enabled false
 # App GW
 az network application-gateway show-backend-health -g $rg -n $appgw_name
 az network application-gateway stop -g $rg -n $appgw_name
