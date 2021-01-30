@@ -299,7 +299,8 @@ def healthcheck():
     if request.method == 'GET':
         try:
           msg = {
-            'health': 'OK'
+            'health': 'OK',
+            'version': '1.0'
           }          
           return jsonify(msg)
         except Exception as e:
