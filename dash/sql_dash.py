@@ -90,6 +90,7 @@ def render_graph(n):
                 # app.logger.error(e)
                 print(error_msg)
                 print(e)
+                return None
         else:
             app.logger.error('Sorry, this dashboard only supports the SQL Server, MySQL and Postgres are on the roadmap')
 

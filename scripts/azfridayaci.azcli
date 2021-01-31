@@ -1,7 +1,16 @@
 ###############################################
 # Azure Container Instances with Azure CLI
 #
-# Creates for Azure Friday demo with ACI
+# Script for Azure Friday demo with ACI
+# - ACI in vnet
+# - init and sidecar containers
+# - the init container auto-registers in private DNS
+# - private link for Azure SQL
+# - images stored in ACR
+# - ACI deployment via YAML
+# - App GW used to frontend containers, with end-to-end SSL
+#
+# Tested with zsh (if run with bash there are probably A LOT of missing "")
 #
 # Jose Moreno, January 2021
 ###############################################
@@ -30,8 +39,47 @@ az network vnet subnet create --vnet-name $vnet_name -g $rg -n $appgw_subnet_nam
 az network vnet subnet create --vnet-name $vnet_name -g $rg -n $aci_subnet_name --address-prefix $aci_subnet_prefix
 az network vnet subnet create --vnet-name $vnet_name -g $rg -n $sql_subnet_name --address-prefix $sql_subnet_prefix
 
+# Create ACR and build images
+acr_name=acilab$RANDOM
+az acr create -n $acr_name -g $rg --sku Standard
+# Build web frontend
+dir=$(ls -ald web)
+if [[ -n "$dir" ]]
+then
+    az acr build -t azurefriday/web:1.0 -r $acr_name ./web
+else
+    echo "I cannot find the directory with the web app, are you in the right folder?"
+fi
+# Build API
+dir=$(ls -ald api)
+if [[ -n "$dir" ]]
+then
+    # Verify the code is showing the correct version
+    version=$(grep "'version': '1.0'" ./api/sql_api.py)
+    if [[ -n "$version" ]]
+    then
+        az acr build -t azurefriday/api:1.0 -r $acr_name ./api
+    else
+        echo "Mmmmh, it looks like you have the wrong version in sql_api.py???"
+        grep "'version'" ./api/sql_api.py
+    fi
+else
+    echo "I cannot find the directory with the API code, are you in the right folder?"
+fi
+# Build dashboard
+dir=$(ls -ald dash)
+if [[ -n "$dir" ]]
+then
+    az acr build -t azurefriday/dash:1.0 -r $acr_name ./dash
+else
+    echo "I cannot find the directory with the dashboard code, are you in the right folder?"
+fi
+# Verify created images
+az acr repository list -n $acr_name -o table
+
 # Create database
 sql_server_name=sqlserver$RANDOM
+# sql_server_name=$(az sql server list -g $rg --query '[0].name' -o tsv) && echo $sql_server_name
 sql_db_name=mydb
 sql_username=azure
 sql_password=Microsoft123!
@@ -45,41 +93,47 @@ sql_server_id=$(az sql server show -n $sql_server_name -g $rg -o tsv --query id)
 az network vnet subnet update -n $sql_subnet_name -g $rg --vnet-name $vnet_name --disable-private-endpoint-network-policies true
 az network private-endpoint create -n $sql_endpoint_name -g $rg \
   --vnet-name $vnet_name --subnet $sql_subnet_name \
-  --private-connection-resource-id $sql_server_id --group-ids sqlServer --connection-name sqlConnection
+  --private-connection-resource-id $sql_server_id --group-id sqlServer --connection-name sqlConnection
 
 # Get endpoint's private IP address
 sql_nic_id=$(az network private-endpoint show -n $sql_endpoint_name -g $rg --query 'networkInterfaces[0].id' -o tsv)
 sql_endpoint_ip=$(az network nic show --ids $sql_nic_id --query 'ipConfigurations[0].privateIpAddress' -o tsv) && echo $sql_endpoint_ip
 
 # Create Azure private DNS zone for private link and required A record
-dns_zone_name=privatelink.database.windows.net
-az network private-dns zone create -n $dns_zone_name -g $rg 
-az network private-dns link vnet create -g $rg -z $dns_zone_name -n myDnsLink --virtual-network $vnet_name --registration-enabled false
-az network private-dns record-set a create -n $sql_server_name -z $dns_zone_name -g $rg
-az network private-dns record-set a add-record --record-set-name $sql_server_name -z $dns_zone_name -g $rg -a $sql_endpoint_ip
+plink_dns_zone_name=privatelink.database.windows.net
+az network private-dns zone create -n $plink_dns_zone_name -g $rg 
+az network private-dns link vnet create -g $rg -z $plink_dns_zone_name -n privatelink --virtual-network $vnet_name --registration-enabled false
+az network private-dns record-set a create -n $sql_server_name -z $plink_dns_zone_name -g $rg
+az network private-dns record-set a add-record --record-set-name $sql_server_name -z $plink_dns_zone_name -g $rg -a $sql_endpoint_ip
 
-# Create SP (used later by init container to update private DNS zone)
+# Create SP and grant access to RG (used later by init container to update private DNS zone and for ACR pulls)
 scope=$(az group show -n $rg --query id -o tsv)
 new_sp=$(az ad sp create-for-rbac --scopes $scope --role Contributor --name acilab)
 sp_appid=$(echo $new_sp | jq -r '.appId') && echo $sp_appid
 sp_tenant=$(echo $new_sp | jq -r '.tenant') && echo $sp_tenant
 sp_password=$(echo $new_sp | jq -r '.password')
 
-# Create Azure DNS private zone for ACIs and link it to Vnet
+# Create Azure private DNS zone for ACIs and link it to Vnet
 dns_zone_name=contoso.com
 az network private-dns zone create -n $dns_zone_name -g $rg 
 az network private-dns link vnet create -g $rg -z $dns_zone_name -n contoso --virtual-network $vnet_name --registration-enabled false
 
 # Get network profile ID
 # Network profiles are created when a container is created, hence we create and delete a dummy container to the vnet first
-vnet_id=$(az network vnet show -n $vnet_name -g $rg --query id -o tsv)
-subnet_id=$(az network vnet subnet show -n $aci_subnet_name --vnet-name $vnet_name -g $rg --query id -o tsv)
+vnet_id=$(az network vnet show -n $vnet_name -g $rg --query id -o tsv) && echo $vnet_id
+subnet_id=$(az network vnet subnet show -n $aci_subnet_name --vnet-name $vnet_name -g $rg --query id -o tsv) && echo $subnet_id
 az container create -n dummy -g $rg --image mcr.microsoft.com/azuredocs/aci-helloworld --ip-address private --ports 80 --vnet $vnet_id --subnet $subnet_id
+# If the previous command fails with an error, it is no problem, as long as a network profile is created (see below)
 az container delete -n dummy -g $rg -y
 nw_profile_id=$(az network profile list -g $rg --query '[0].id' -o tsv) && echo $nw_profile_id
+if [[ -z "$nw_profile_id" ]]
+then
+    echo "No network profile could be created!!"
+fi
 
 # Create script for init container in an AzFiles share
 storage_account_name="acilab$RANDOM"
+# storage_account_name=$(az storage account list -g $rg --query '[0].name' -o tsv) && echo $storage_account_name
 az storage account create -n $storage_account_name -g $rg --sku Standard_LRS --kind StorageV2
 storage_account_key=$(az storage account keys list --account-name $storage_account_name -g $rg --query '[0].value' -o tsv)
 az storage share create --account-name $storage_account_name --account-key $storage_account_key --name initscript
@@ -175,6 +229,10 @@ function deploy_aci() {
   location: westus
   name: $aci_name
   properties:
+    imageRegistryCredentials: # Credentials to pull a private image
+    - server: ${acr_name}.azurecr.io
+      username: $sp_appid
+      password: $sp_password
     networkProfile:
       id: $nw_profile_id
     initContainers:
@@ -219,7 +277,7 @@ function deploy_aci() {
           mountPath: /etc/nginx
     - name: web
       properties:
-        image: erjosito/web:1.0
+        image: ${acr_name}.azurecr.io/azurefriday/web:1.0
         environmentVariables:
         - name: API_URL
           value: 127.0.0.1:8080
@@ -278,8 +336,9 @@ EOF
 
 # Create dashboard app
 dash_name=dash
-az container create -n $dash_name -g $rg --image erjosito/sqldash:1.0 --vnet $vnet_id --subnet $subnet_id --ip-address private --ports 8050  \
-  -e "SQL_SERVER_FQDN=${sql_server_fqdn}" "SQL_SERVER_USERNAME=${sql_username}" "SQL_SERVER_PASSWORD=${sql_password}" "SQL_SERVER_DB=${sql_db_name}"
+az container create -n $dash_name -g $rg --image ${acr_name}.azurecr.io/azurefriday/dash:1.0 --vnet $vnet_id --subnet $subnet_id --ip-address private --ports 8050  \
+  -e "SQL_SERVER_FQDN=${sql_server_fqdn}" "SQL_SERVER_USERNAME=${sql_username}" "SQL_SERVER_PASSWORD=${sql_password}" "SQL_SERVER_DB=${sql_db_name}" \
+  --registry-login-server ${acr_name}.azurecr.io --registry-username $sp_appid --registry-password $sp_password
 dash_ip=$(az container show -n $dash_name -g $rg --query 'ipAddress.ip' -o tsv) && echo $dash_ip
 
 # Application gateway
@@ -287,18 +346,18 @@ appgw_name=appgw
 appgw_pip_name=${appgw_name}-pip
 appgw_pip_dns=${appgw_name}$RANDOM
 allocation_method=Static
-az network public-ip create -g $rg -n $appgw_pipname --sku Standard --allocation-method $allocation_method --dns-name $appgw_pip_dns
-appgw_fqdn=$(az network public-ip show -g $rg -n $appgw_pipname --query dnsSettings.fqdn -o tsv)
+az network public-ip create -g $rg -n $appgw_pip_name --sku Standard --allocation-method $allocation_method --dns-name $appgw_pip_dns
+appgw_fqdn=$(az network public-ip show -g $rg -n $appgw_pip_name --query dnsSettings.fqdn -o tsv)
 az network application-gateway create -g $rg -n $appgw_name --min-capacity 1 --max-capacity 2 --sku Standard_v2 \
     --frontend-port 8050 --routing-rule-type basic \
     --http-settings-port 8050 --http-settings-protocol Http \
     --public-ip-address $appgw_pip_name --vnet-name $vnet_name --subnet $appgw_subnet_name \
-    --servers "$dash_ip" --no-wait
+    --servers "$dash_ip"
 echo "You can browse to http://${appgw_fqdn}:8050 for the demo dashboard"
 
 # Create listener and backend for ACI (production)
 az network application-gateway address-pool create -n acipool -g $rg --gateway-name $appgw_name \
-  --servers ${aci_name_prefix}-01.contoso.com ${aci_name_prefix}-02.contoso.com ${aci_name_prefix}-03.contoso.com
+  --servers ${aci_name_prefix}-01.contoso.com ${aci_name_prefix}-02.contoso.com ${aci_name_prefix}-03.contoso.com ${aci_name_prefix}-04.contoso.com
 az network application-gateway probe create -g $rg --gateway-name $appgw_name \
   --name aciprobe --protocol Https --host-name-from-http-settings --match-status-codes 200-399 --port 443 --path /api/healthcheck
 az network application-gateway root-cert create -g $rg --gateway-name $appgw_name \
@@ -324,7 +383,7 @@ az network application-gateway rule create -g $rg --gateway-name $appgw_name -n 
   --http-listener acidevlistener --rule-type Basic --address-pool acidevpool --http-settings acisettings
 
 # Provision prod ACIs
-prod_image=erjosito/sqlapi:1.0
+prod_image=${acr_name}.azurecr.io/azurefriday/api:1.0
 deploy_aci ${aci_name_prefix}-01 $prod_image
 deploy_aci ${aci_name_prefix}-02 $prod_image
 echo "You can verify the production environment under https://${appgw_fqdn}/api/healthcheck once the containers are successfully provisioned"
@@ -344,47 +403,101 @@ do
 done
 # While this is running, have a look at the dashboard, you should see the IP addresses of the container generating traffic
 
+##################
+#   Demo start   #
+##################
+
 # Change something in the code, create a dev image and provision dev containers
-dev_image=erjosito/sqlapi:1.0  # Using the same image here
+# In this example we change the returned version to 1.1 with sed
+dir=$(ls -ald api)
+if [[ -n "$dir" ]]
+then
+    sed -i "s/'version': '1.0'/'version': '1.1'/g" ./api/sql_api.py # sample modification
+    az acr build -t azurefriday/api:1.1 -r $acr_name ./api
+    sed -i "s/'version': '1.1'/'version': '1.0'/g" ./api/sql_api.py # restore the source code to how it was
+else
+    echo "I cannot find the directory with the web app, are you in the right folder?"
+fi
+dev_image=${acr_name}.azurecr.io/azurefriday/api:1.1
 deploy_aci ${aci_name_prefix}-dev-01 $dev_image
 deploy_aci ${aci_name_prefix}-dev-02 $dev_image
-echo "You can verify the staging environment under https://${appgw_fqdn}:8443/api/healthcheck"
 
 # Verify that the containers are successfully provisioned
 az container list -g $rg -o table
+echo "You can verify the staging environment under https://${appgw_fqdn}:8443/api/healthcheck"
+curl -k "https://${appgw_fqdn}:8443/api/healthcheck"
+
+# !!
+# It can be that the App GW is not able to refresh the DNS resolution for the new dev ACIs?
+# !!
 
 # After having validated the dev image, promote the image to production
-prod_image=erjosito/sqlapi:1.0
-deploy_aci ${aci_name_prefix}-01 $prod_image
-deploy_aci ${aci_name_prefix}-02 $prod_image
-echo "You can verify the production environment under https://${appgw_fqdn}/api/healthcheck"
+prod_image_new=${acr_name}.azurecr.io/azurefriday/api:1.1
+deploy_aci ${aci_name_prefix}-03 $prod_image_new
+deploy_aci ${aci_name_prefix}-04 $prod_image_new
 
 # Verify that the containers are successfully provisioned
 az container list -g $rg -o table
+echo "You can verify the production environment under https://${appgw_fqdn}/api/healthcheck"
+curl -k "https://${appgw_fqdn}/api/healthcheck"
 
 # Generate some production traffic
 for i in {1..120}
 do
-   curl -k https://${appgw_fqdn}/api/sqlsrciplog
+   curl -k "https://${appgw_fqdn}/api/sqlsrciplog"
    sleep 1
 done
+
+# And delete the 2 ACIs with the old image, so that only 3 and 4 remain
+az container delete -n  ${aci_name_prefix}-01 -g $rg -y
+az container delete -n  ${aci_name_prefix}-02 -g $rg -y
+
 # While this is running, have a look at the dashboard, you should see the IP addresses of the new containers taking the traffic load
 
-# Diagnostic and troubleshooting commands
+# !!
+# It looks like there is no IP address change when redeploying an ACI with the same name
+# !!
+
+###########################################
+# Diagnostic and troubleshooting commands #
+###########################################
+
+# ACI deployment
 more $aci_yaml_file
 az container list -g $rg -o table
-az container logs -n ${aci_name_prefix}-03 -g $rg --container-name azcli
-az network private-dns record-set a list -z $dns_zone_name -g $rg
+# DNS
+az network private-dns record-set a list -z privatelink.database.windows.net -g $rg
+az network private-dns link vnet delete -g $rg -z privatelink.database.windows.net -n privatelink -y
+az network private-dns link vnet create -g $rg -z privatelink.database.windows.net -n privatelink --virtual-network $vnet_name --registration-enabled false
+# App GW
 az network application-gateway show-backend-health -g $rg -n $appgw_name
+az network application-gateway stop -g $rg -n $appgw_name
+az network application-gateway start -g $rg -n $appgw_name
+az network application-gateway address-pool update -n acipool -g $rg --gateway-name $appgw_name \
+  --servers dummy.contoso.com
+az network application-gateway address-pool update -n acipool -g $rg --gateway-name $appgw_name \
+  --servers ${aci_name_prefix}-01.contoso.com ${aci_name_prefix}-02.contoso.com ${aci_name_prefix}-03.contoso.com
+# API logs
+az container logs -n ${aci_name_prefix}-03 -g $rg --container-name azcli
+az container logs -n ${aci_name_prefix}-dev-01 -g $rg --container-name sqlapi
 # Dashboard page
 az container logs -n $dash_name -g $rg
 az container restart -n $dash_name -g $rg
 az container delete -n $dash_name -g $rg -y
-az container create -n $dash_name -g $rg --image erjosito/sqldash:1.0 --vnet $vnet_id --subnet $subnet_id --ip-address private --ports 8050  \
-  -e "SQL_SERVER_FQDN=${sql_server_fqdn}" "SQL_SERVER_USERNAME=${sql_username}" "SQL_SERVER_PASSWORD=${sql_password}" "SQL_SERVER_DB=${sql_db_name}" --no-wait
+az container create -n $dash_name -g $rg --image ${acr_name}.azurecr.io/azurefriday/dash:1.0 --vnet $vnet_id --subnet $subnet_id --ip-address private --ports 8050  \
+  -e "SQL_SERVER_FQDN=${sql_server_fqdn}" "SQL_SERVER_USERNAME=${sql_username}" "SQL_SERVER_PASSWORD=${sql_password}" "SQL_SERVER_DB=${sql_db_name}" \
+  --registry-login-server ${acr_name}.azurecr.io --registry-username $sp_appid --registry-password $sp_password --no-wait
 dash_ip=$(az container show -n $dash_name -g $rg --query 'ipAddress.ip' -o tsv) && echo $dash_ip
 az network application-gateway address-pool show -n appGatewayBackendPool -g $rg --gateway-name $appgw_name --query backendAddresses
 az network application-gateway address-pool update -n appGatewayBackendPool -g $rg --gateway-name $appgw_name --servers $dash_ip
+# Optionally, deploy a VM inside of the VNet for troubleshooting
+vm_subnet_name=vm
+vm_subnet_prefix=192.168.10.0/24
+az network vnet subnet create -n $vm_subnet_name --address-prefix $vm_subnet_prefix --vnet-name $vnet_name -g $rg
+az vm create -n test-vm -g $rg -l $location --image ubuntuLTS --generate-ssh-keys \
+    --public-ip-address test-vm-pip --vnet-name $vnet_name --subnet $vm_subnet_name
+vm_ip=$(az network public-ip show -n test-vm-pip -g $rg --query ipAddress -o tsv)
+echo "You can connect to VM $vm_ip for troubleshooting from within the VNet"
 
 # Cleanup everything
 # az group delete -n $rg -y --no-wait
