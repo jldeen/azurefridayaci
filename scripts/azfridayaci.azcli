@@ -20,7 +20,7 @@
 # Additionally with managed identity
 
 # Variables
-rg=acilab
+rg=azurefridayaci
 location=westeurope
 aci_name_prefix=sqlapi
 vnet_name=acivnet
