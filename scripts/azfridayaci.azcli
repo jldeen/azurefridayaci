@@ -146,6 +146,8 @@ echo "Logging into Azure..."
 az login --service-principal -u \$SP_APPID -p \$SP_PASSWORD --tenant \$SP_TENANT
 echo "Finding out IP address..."
 my_private_ip=\$(az container show -n \$ACI_NAME -g \$RG --query 'ipAddress.ip' -o tsv) && echo \$my_private_ip
+echo "Trying to delete DNS record, if it exists..."
+az network private-dns record-set a delete -n \$HOSTNAME -z \$DNS_ZONE_NAME -g \$RG -y
 echo "Creating DNS record..."
 az network private-dns record-set a create -n \$HOSTNAME -z \$DNS_ZONE_NAME -g \$RG
 az network private-dns record-set a add-record --record-set-name \$HOSTNAME -z \$DNS_ZONE_NAME -g \$RG -a \$my_private_ip
@@ -217,7 +219,18 @@ nginx_conf=$(cat $nginx_config_file | base64)
 ssl_crt=$(cat /tmp/contoso.com.crt | base64)
 ssl_key=$(cat /tmp/contoso.com.key | base64)
 
-# Function to deploy an ACI to the vnet (we will deploy two of them)
+# Function to generate random string
+function random_string () {
+    if [[ -n "$1" ]]
+    then
+      length=$1
+    else
+      length=6
+    fi
+    echo $(tr -dc a-z </dev/urandom | head -c $length ; echo '')
+}
+
+# Function to deploy an ACI to the vnet
 function deploy_aci() {
   # ACI name must be provided as argument
   aci_name=$1
@@ -390,6 +403,11 @@ echo "You can verify the production environment under https://${appgw_fqdn}/api/
 
 # Verify that the containers are successfully provisioned
 az container list -g $rg -o table
+az network application-gateway show-backend-health -g $rg -n $appgw_name -o tsv --query 'backendAddressPools[].backendHttpSettingsCollection[].servers[].[address,health]'
+# <if_dns_refresh_required>
+az network application-gateway address-pool update -n acipool -g $rg --gateway-name $appgw_name --servers dummy.contoso.com
+az network application-gateway address-pool update -n acipool -g $rg --gateway-name $appgw_name --servers ${aci_name_prefix}-01.contoso.com ${aci_name_prefix}-02.contoso.com ${aci_name_prefix}-03.contoso.com ${aci_name_prefix}-04.contoso.com
+# </if_dns_refresh_required>
 curl -k "https://${appgw_fqdn}/api/healthcheck"
 
 # Initialize the database (this has to be done only once in the database to create a table)
@@ -422,22 +440,28 @@ dev_image=${acr_name}.azurecr.io/azurefriday/api:1.1
 deploy_aci ${aci_name_prefix}-dev-01 $dev_image
 deploy_aci ${aci_name_prefix}-dev-02 $dev_image
 
-# Verify that the containers are successfully provisioned
+# Verify that the containers are successfully provisioned, if required reprovision the appgw backend to refresh DNS
 az container list -g $rg -o table
+az network application-gateway show-backend-health -g $rg -n $appgw_name -o tsv --query 'backendAddressPools[].backendHttpSettingsCollection[].servers[].[address,health]'
+# <if_dns_refresh_required>
+az network application-gateway address-pool update -n acidevpool -g $rg --gateway-name $appgw_name --servers dummy.contoso.com
+az network application-gateway address-pool update -n acidevpool -g $rg --gateway-name $appgw_name --servers ${aci_name_prefix}-dev-01.contoso.com ${aci_name_prefix}-dev-02.contoso.com 
+# </if_dns_refresh_required>
 echo "You can verify the staging environment under https://${appgw_fqdn}:8443/api/healthcheck"
 curl -k "https://${appgw_fqdn}:8443/api/healthcheck"
 
-# !!
-# It can be that the App GW is not able to refresh the DNS resolution for the new dev ACIs?
-# !!
-
 # After having validated the dev image, promote the image to production
-prod_image_new=${acr_name}.azurecr.io/azurefriday/api:1.1
-deploy_aci ${aci_name_prefix}-03 $prod_image_new
-deploy_aci ${aci_name_prefix}-04 $prod_image_new
+prod_image_new=$dev_image
+deploy_aci ${aci_name_prefix}-01 $prod_image_new
+deploy_aci ${aci_name_prefix}-02 $prod_image_new
 
 # Verify that the containers are successfully provisioned
 az container list -g $rg -o table
+az network application-gateway show-backend-health -g $rg -n $appgw_name -o tsv --query 'backendAddressPools[].backendHttpSettingsCollection[].servers[].[address,health]'
+# <if_dns_refresh_required>
+az network application-gateway address-pool update -n acipool -g $rg --gateway-name $appgw_name --servers dummy.contoso.com
+az network application-gateway address-pool update -n acipool -g $rg --gateway-name $appgw_name --servers ${aci_name_prefix}-01.contoso.com ${aci_name_prefix}-02.contoso.com ${aci_name_prefix}-03.contoso.com ${aci_name_prefix}-04.contoso.com
+# </if_dns_refresh_required>
 echo "You can verify the production environment under https://${appgw_fqdn}/api/healthcheck"
 curl -k "https://${appgw_fqdn}/api/healthcheck"
 
@@ -447,12 +471,6 @@ do
    curl -k "https://${appgw_fqdn}/api/sqlsrciplog"
    sleep 1
 done
-
-# And delete the 2 ACIs with the old image, so that only 3 and 4 remain
-az container delete -n  ${aci_name_prefix}-01 -g $rg -y
-az container delete -n  ${aci_name_prefix}-02 -g $rg -y
-
-# While this is running, have a look at the dashboard, you should see the IP addresses of the new containers taking the traffic load
 
 # !!
 # It looks like there is no IP address change when redeploying an ACI with the same name
@@ -471,12 +489,13 @@ az network private-dns link vnet delete -g $rg -z privatelink.database.windows.n
 az network private-dns link vnet create -g $rg -z privatelink.database.windows.net -n privatelink --virtual-network $vnet_name --registration-enabled false
 # App GW
 az network application-gateway show-backend-health -g $rg -n $appgw_name
+az network application-gateway show-backend-health -g $rg -n $appgw_name -o tsv --query 'backendAddressPools[].backendHttpSettingsCollection[].servers[].[address,health]'
 az network application-gateway stop -g $rg -n $appgw_name
 az network application-gateway start -g $rg -n $appgw_name
-az network application-gateway address-pool update -n acipool -g $rg --gateway-name $appgw_name \
-  --servers dummy.contoso.com
-az network application-gateway address-pool update -n acipool -g $rg --gateway-name $appgw_name \
-  --servers ${aci_name_prefix}-01.contoso.com ${aci_name_prefix}-02.contoso.com ${aci_name_prefix}-03.contoso.com
+az network application-gateway address-pool update -n acipool -g $rg --gateway-name $appgw_name --servers dummy.contoso.com
+az network application-gateway address-pool update -n acipool -g $rg --gateway-name $appgw_name --servers ${aci_name_prefix}-01.contoso.com ${aci_name_prefix}-02.contoso.com ${aci_name_prefix}-03.contoso.com ${aci_name_prefix}-04.contoso.com
+az network application-gateway address-pool update -n acidevpool -g $rg --gateway-name $appgw_name --servers dummy.contoso.com
+az network application-gateway address-pool update -n acidevpool -g $rg --gateway-name $appgw_name --servers ${aci_name_prefix}-dev-01.contoso.com ${aci_name_prefix}-dev-02.contoso.com 
 # API logs
 az container logs -n ${aci_name_prefix}-03 -g $rg --container-name azcli
 az container logs -n ${aci_name_prefix}-dev-01 -g $rg --container-name sqlapi

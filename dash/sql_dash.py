@@ -37,11 +37,18 @@ app.layout = dbc.Container([
                 ])
             ], style={'width': '100%'})
         ),
-        html.Div(html.P("The following image describes the overall architecture: Azure Application Gateway acts as frontend to production and staging farms, using Azure private DNS zones for service discovery. Traffic is encrypted end-to-end.")),
-        html.Div(html.Img(src = app.get_asset_url('nginx-sidecar.png'), width = '100%'), style={'width':'75%', 'margin':25, 'textAlign': 'center'}),
-        html.Div(html.P("This chart shows the source IP addresses that have sent traffic to the production database. All traffic is coming from private addresses, and the configuration for the application gateway backends does not need to be modified thanks the the DNS-based service discovery mechanism.")),
-        html.Div(id='accessgraph'),
-        html.Div(html.P("The previous chart is updated in real time every 2s")),
+        html.Table([
+            html.Tr([
+                html.Td([
+                    html.P("The following image describes the overall architecture: Azure Application Gateway acts as frontend to production and staging farms, using Azure private DNS zones for service discovery. Traffic is encrypted end-to-end."),
+                    html.Img(src = app.get_asset_url('nginx-sidecar.png'), width = '100%'),
+                    html.P("This chart shows the source IP addresses that have sent traffic to the production database. All traffic is coming from private addresses, and the configuration for the application gateway backends does not need to be modified thanks the the DNS-based service discovery mechanism."),
+                ], style={'width': '70%'}),
+                html.Td([
+                    html.Div(id='accessgraph'),
+                ], style={'width': '30%'})
+            ])
+        ], style={'width': '100%'}),
         dcc.Interval(
             id='interval-component',
             interval=1*2000, # in milliseconds
