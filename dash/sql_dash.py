@@ -23,7 +23,9 @@ import pymysql
 
 # Style
 # external_stylesheets = ['https://codepen.io/chriddyp/pen/bWLwgP.css']
-external_stylesheets = [dbc.themes.BOOTSTRAP]
+# external_stylesheets = [dbc.themes.BOOTSTRAP]
+# external_stylesheets = [dbc.themes.COSMO]
+external_stylesheets = [dbc.themes.CERULEAN]
 
 # Layout
 app = dash.Dash(__name__, external_stylesheets=external_stylesheets)
@@ -32,17 +34,18 @@ app.layout = dbc.Container([
             html.Table([
                 html.Tr([
                     html.Td(html.A('Github repo', href='https://github.com/jldeen/azurefridayaci'), style={'width': '20%'}),
-                    html.Td(html.H4('Application dashboard'), style={'width': '60%', 'textAlign': 'center'}),
-                    html.Td(html.Img(src = app.get_asset_url('azurelogo.png'), width = 200), style={'width': '20%'})
+                    html.Td(html.H2('Azure Friday - ACI'), style={'width': '60%', 'textAlign': 'center'}),
+                    html.Td(html.Img(src = app.get_asset_url('azurelogo.png'), width = 125), style={'width': '20%'})
                 ])
             ], style={'width': '100%'})
         ),
+        html.Div(html.P("")),
         html.Table([
             html.Tr([
                 html.Td([
                     html.P("The following image describes the overall architecture: Azure Application Gateway acts as frontend to production and staging farms, using Azure private DNS zones for service discovery. Traffic is encrypted end-to-end."),
                     html.Img(src = app.get_asset_url('nginx-sidecar.png'), width = '100%'),
-                    html.P("This chart shows the source IP addresses that have sent traffic to the production database. All traffic is coming from private addresses, and the configuration for the application gateway backends does not need to be modified thanks the the DNS-based service discovery mechanism."),
+                    html.P("The real-time chart on the right shows the source IP addresses that have sent traffic to the production database. All traffic is coming from private addresses, and the configuration for the application gateway backends does not need to be modified thanks the the DNS-based service discovery mechanism."),
                 ], style={'width': '70%'}),
                 html.Td([
                     html.Div(id='accessgraph'),

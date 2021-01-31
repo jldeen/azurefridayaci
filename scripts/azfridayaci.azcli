@@ -32,6 +32,20 @@ aci_subnet_prefix=192.168.2.0/24
 sql_subnet_name=sql
 sql_subnet_prefix=192.168.3.0/24
 
+# Function to generate random string
+function random_string () {
+    if [[ -n "$1" ]]
+    then
+      length=$1
+    else
+      length=6
+    fi
+    echo $(tr -dc a-z </dev/urandom | head -c $length ; echo '')
+}
+
+# Generate a 6-character, lower-case alphabetic, random string
+unique_id=$(random_string 6)
+
 # Create test RG and Vnet
 az group create -n $rg -l $location
 az network vnet create -n $vnet_name -g $rg --address-prefix $vnet_prefix
@@ -40,8 +54,8 @@ az network vnet subnet create --vnet-name $vnet_name -g $rg -n $aci_subnet_name 
 az network vnet subnet create --vnet-name $vnet_name -g $rg -n $sql_subnet_name --address-prefix $sql_subnet_prefix
 
 # Create ACR and build images
-acr_name=acilab$RANDOM
-az acr create -n $acr_name -g $rg --sku Standard
+acr_name=acilab${unique_id}
+az acr create -n $acr_name -g $rg --sku Premium
 # Build web frontend
 dir=$(ls -ald web)
 if [[ -n "$dir" ]]
@@ -78,7 +92,7 @@ fi
 az acr repository list -n $acr_name -o table
 
 # Create database
-sql_server_name=sqlserver$RANDOM
+sql_server_name=sqlserver-${unique_id}
 # sql_server_name=$(az sql server list -g $rg --query '[0].name' -o tsv) && echo $sql_server_name
 sql_db_name=mydb
 sql_username=azure
@@ -132,9 +146,9 @@ then
 fi
 
 # Create script for init container in an AzFiles share
-storage_account_name="acilab$RANDOM"
+storage_account_name="acilab${unique_id}"
 # storage_account_name=$(az storage account list -g $rg --query '[0].name' -o tsv) && echo $storage_account_name
-az storage account create -n $storage_account_name -g $rg --sku Standard_LRS --kind StorageV2
+az storage account create -n $storage_account_name -g $rg --sku Premium_LRS --kind FileStorage
 storage_account_key=$(az storage account keys list --account-name $storage_account_name -g $rg --query '[0].value' -o tsv)
 az storage share create --account-name $storage_account_name --account-key $storage_account_key --name initscript
 init_script_filename=init.sh
@@ -218,17 +232,6 @@ EOF
 nginx_conf=$(cat $nginx_config_file | base64)
 ssl_crt=$(cat /tmp/contoso.com.crt | base64)
 ssl_key=$(cat /tmp/contoso.com.key | base64)
-
-# Function to generate random string
-function random_string () {
-    if [[ -n "$1" ]]
-    then
-      length=$1
-    else
-      length=6
-    fi
-    echo $(tr -dc a-z </dev/urandom | head -c $length ; echo '')
-}
 
 # Function to deploy an ACI to the vnet
 function deploy_aci() {
@@ -329,7 +332,7 @@ function deploy_aci() {
       name: nginx-config
     - name: initscript
       azureFile:
-        readOnly: false
+        readOnly: true
         shareName: initscript
         storageAccountName: $storage_account_name
         storageAccountKey: $storage_account_key
@@ -354,10 +357,19 @@ az container create -n $dash_name -g $rg --image ${acr_name}.azurecr.io/azurefri
   --registry-login-server ${acr_name}.azurecr.io --registry-username $sp_appid --registry-password $sp_password
 dash_ip=$(az container show -n $dash_name -g $rg --query 'ipAddress.ip' -o tsv) && echo $dash_ip
 
+# Provision prod/dev ACIs
+prod_image=${acr_name}.azurecr.io/azurefriday/api:1.0
+deploy_aci ${aci_name_prefix}-01 $prod_image
+deploy_aci ${aci_name_prefix}-02 $prod_image
+deploy_aci ${aci_name_prefix}-dev-01 $prod_image
+deploy_aci ${aci_name_prefix}-dev-02 $prod_image
+
+echo "You can verify the production environment under https://${appgw_fqdn}/api/healthcheck once the containers are successfully provisioned"
+
 # Application gateway
 appgw_name=appgw
 appgw_pip_name=${appgw_name}-pip
-appgw_pip_dns=${appgw_name}$RANDOM
+appgw_pip_dns=${appgw_name}-${unique_id}
 allocation_method=Static
 az network public-ip create -g $rg -n $appgw_pip_name --sku Standard --allocation-method $allocation_method --dns-name $appgw_pip_dns
 appgw_fqdn=$(az network public-ip show -g $rg -n $appgw_pip_name --query dnsSettings.fqdn -o tsv)
@@ -366,11 +378,10 @@ az network application-gateway create -g $rg -n $appgw_name --min-capacity 1 --m
     --http-settings-port 8050 --http-settings-protocol Http \
     --public-ip-address $appgw_pip_name --vnet-name $vnet_name --subnet $appgw_subnet_name \
     --servers "$dash_ip"
-echo "You can browse to http://${appgw_fqdn}:8050 for the demo dashboard"
 
 # Create listener and backend for ACI (production)
 az network application-gateway address-pool create -n acipool -g $rg --gateway-name $appgw_name \
-  --servers ${aci_name_prefix}-01.contoso.com ${aci_name_prefix}-02.contoso.com ${aci_name_prefix}-03.contoso.com ${aci_name_prefix}-04.contoso.com
+  --servers ${aci_name_prefix}-01.contoso.com ${aci_name_prefix}-02.contoso.com
 az network application-gateway probe create -g $rg --gateway-name $appgw_name \
   --name aciprobe --protocol Https --host-name-from-http-settings --match-status-codes 200-399 --port 443 --path /api/healthcheck
 az network application-gateway root-cert create -g $rg --gateway-name $appgw_name \
@@ -395,31 +406,54 @@ az network application-gateway http-listener create -n acidevlistener -g $rg --g
 az network application-gateway rule create -g $rg --gateway-name $appgw_name -n acidevrule \
   --http-listener acidevlistener --rule-type Basic --address-pool acidevpool --http-settings acisettings
 
-# Provision prod ACIs
-prod_image=${acr_name}.azurecr.io/azurefriday/api:1.0
-deploy_aci ${aci_name_prefix}-01 $prod_image
-deploy_aci ${aci_name_prefix}-02 $prod_image
-echo "You can verify the production environment under https://${appgw_fqdn}/api/healthcheck once the containers are successfully provisioned"
+# Resets the backends in the app gw to force DNS refresh
+function reset_backends () {
+    echo "Resetting production pool..."
+    az network application-gateway address-pool update -n acipool -g $rg --gateway-name $appgw_name --servers dummy.contoso.com
+    az network application-gateway address-pool update -n acipool -g $rg --gateway-name $appgw_name \
+        --servers ${aci_name_prefix}-01.contoso.com ${aci_name_prefix}-02.contoso.com
+    echo "Resetting staging pool..."
+    az network application-gateway address-pool update -n acidevpool -g $rg --gateway-name $appgw_name --servers dummy.contoso.com
+    az network application-gateway address-pool update -n acidevpool -g $rg --gateway-name $appgw_name \
+        --servers ${aci_name_prefix}-dev-01.contoso.com ${aci_name_prefix}-dev-02.contoso.com
+}
 
 # Verify that the containers are successfully provisioned
-az container list -g $rg -o table
-az network application-gateway show-backend-health -g $rg -n $appgw_name -o tsv --query 'backendAddressPools[].backendHttpSettingsCollection[].servers[].[address,health]'
-# <if_dns_refresh_required>
-az network application-gateway address-pool update -n acipool -g $rg --gateway-name $appgw_name --servers dummy.contoso.com
-az network application-gateway address-pool update -n acipool -g $rg --gateway-name $appgw_name --servers ${aci_name_prefix}-01.contoso.com ${aci_name_prefix}-02.contoso.com ${aci_name_prefix}-03.contoso.com ${aci_name_prefix}-04.contoso.com
-# </if_dns_refresh_required>
-curl -k "https://${appgw_fqdn}/api/healthcheck"
-
-# Initialize the database (this has to be done only once in the database to create a table)
-curl -k "https://${appgw_fqdn}/api/sqlsrcipinit"
-
-# Generate some production traffic
-for i in {1..30}
-do
-   curl -k "https://${appgw_fqdn}/api/sqlsrciplog"
-   sleep 1
-done
-# While this is running, have a look at the dashboard, you should see the IP addresses of the container generating traffic
+unsucceeded_aci=$(az container list -g $rg -o tsv | grep -v Succeeded)
+if [[ -n "$unsucceeded_aci" ]]
+then
+    echo "There are some containers not provisioned successfully yet:"
+    echo $unsucceeded_aci
+else
+    unhealthy_aci=$(az network application-gateway show-backend-health -g $rg -n $appgw_name -o tsv --query 'backendAddressPools[].backendHttpSettingsCollection[].servers[].[address,health]' | grep -v Healthy)
+    if [[ -n "$unhealthy_aci" ]]
+    then
+        echo "There are some containers not looking healthy for the app gateway:"
+        echo $unhealthy_aci
+        # <if_dns_refresh_required>
+        # az network application-gateway address-pool update -n acipool -g $rg --gateway-name $appgw_name --servers dummy.contoso.com
+        # az network application-gateway address-pool update -n acipool -g $rg --gateway-name $appgw_name --servers ${aci_name_prefix}-01.contoso.com ${aci_name_prefix}-02.contoso.com ${aci_name_prefix}-03.contoso.com ${aci_name_prefix}-04.contoso.com
+        # </if_dns_refresh_required>
+    else
+        echo "All containers are successfully deployed and healthy for the application gateway"
+        echo "You can browse to http://${appgw_fqdn}:8050 for the demo dashboard"
+        echo "You can browse to https://${appgw_fqdn} for the production API"
+        echo "  curl -k https://${appgw_fqdn}/api/healthcheck:"
+        echo $(curl -ks "https://${appgw_fqdn}/api/healthcheck")
+        echo "You can browse to https://${appgw_fqdn}:8443 for the staging API"
+        echo "  curl -k https://${appgw_fqdn}:8443/api/healthcheck:"
+        echo $(curl -ks "https://${appgw_fqdn}:8443/api/healthcheck")
+        echo "Generating some traffic for the production API now..."
+        # Generate some production traffic
+        # While this is running, have a look at the dashboard, you should see the IP addresses of the container generating traffic
+        curl -ks "https://${appgw_fqdn}/api/sqlsrcipinit"
+        for i in {1..10}
+        do
+          curl -ks "https://${appgw_fqdn}/api/sqlsrciplog"
+          sleep 1
+        done
+    fi
+fi
 
 ##################
 #   Demo start   #
@@ -444,23 +478,23 @@ deploy_aci ${aci_name_prefix}-dev-02 $dev_image
 az container list -g $rg -o table
 az network application-gateway show-backend-health -g $rg -n $appgw_name -o tsv --query 'backendAddressPools[].backendHttpSettingsCollection[].servers[].[address,health]'
 # <if_dns_refresh_required>
-az network application-gateway address-pool update -n acidevpool -g $rg --gateway-name $appgw_name --servers dummy.contoso.com
-az network application-gateway address-pool update -n acidevpool -g $rg --gateway-name $appgw_name --servers ${aci_name_prefix}-dev-01.contoso.com ${aci_name_prefix}-dev-02.contoso.com 
+# az network application-gateway address-pool update -n acidevpool -g $rg --gateway-name $appgw_name --servers dummy.contoso.com
+# az network application-gateway address-pool update -n acidevpool -g $rg --gateway-name $appgw_name --servers ${aci_name_prefix}-dev-01.contoso.com ${aci_name_prefix}-dev-02.contoso.com 
 # </if_dns_refresh_required>
 echo "You can verify the staging environment under https://${appgw_fqdn}:8443/api/healthcheck"
 curl -k "https://${appgw_fqdn}:8443/api/healthcheck"
 
-# After having validated the dev image, promote the image to production
+# After having validated the dev image, promote the image to production refreshing the prod containers
 prod_image_new=$dev_image
 deploy_aci ${aci_name_prefix}-01 $prod_image_new
 deploy_aci ${aci_name_prefix}-02 $prod_image_new
 
-# Verify that the containers are successfully provisioned
+# Verify and wait until the containers are successfully provisioned
 az container list -g $rg -o table
 az network application-gateway show-backend-health -g $rg -n $appgw_name -o tsv --query 'backendAddressPools[].backendHttpSettingsCollection[].servers[].[address,health]'
 # <if_dns_refresh_required>
-az network application-gateway address-pool update -n acipool -g $rg --gateway-name $appgw_name --servers dummy.contoso.com
-az network application-gateway address-pool update -n acipool -g $rg --gateway-name $appgw_name --servers ${aci_name_prefix}-01.contoso.com ${aci_name_prefix}-02.contoso.com ${aci_name_prefix}-03.contoso.com ${aci_name_prefix}-04.contoso.com
+# az network application-gateway address-pool update -n acipool -g $rg --gateway-name $appgw_name --servers dummy.contoso.com
+# az network application-gateway address-pool update -n acipool -g $rg --gateway-name $appgw_name --servers ${aci_name_prefix}-01.contoso.com ${aci_name_prefix}-02.contoso.com ${aci_name_prefix}-03.contoso.com ${aci_name_prefix}-04.contoso.com
 # </if_dns_refresh_required>
 echo "You can verify the production environment under https://${appgw_fqdn}/api/healthcheck"
 curl -k "https://${appgw_fqdn}/api/healthcheck"
@@ -517,6 +551,24 @@ az vm create -n test-vm -g $rg -l $location --image ubuntuLTS --generate-ssh-key
     --public-ip-address test-vm-pip --vnet-name $vnet_name --subnet $vm_subnet_name
 vm_ip=$(az network public-ip show -n test-vm-pip -g $rg --query ipAddress -o tsv)
 echo "You can connect to VM $vm_ip for troubleshooting from within the VNet"
+# Configure logging to AzMonitor (Log Analytics extension is required)
+logws_name=log${unique_id}
+az monitor log-analytics workspace create -n $logws_name -g $rg
+logws_id=$(az resource list -g $rg -n $logws_name --query '[].id' -o tsv)
+storage_account_id=$(az storage account show -n $storage_account_name --query id -o tsv)
+storage_share_id=${storage_account_id}/fileservices/initscript
+az monitor diagnostic-settings create -n mydiag --resource $storage_share_id --workspace $logws_id \
+    --metrics '[{"category": "AllMetrics", "enabled": true, "retentionPolicy": {"days": 0, "enabled": false }, "timeGrain": null}]' \
+    --logs '[{"category": "StorageRead", "enabled": true, "retentionPolicy": {"days": 0, "enabled": false}},
+            {"category": "StorageWrite", "enabled": true, "retentionPolicy": {"days": 0, "enabled": false}}]'
+#            {"category": "Transaction", "enabled": true, "retentionPolicy": {"days": 0, "enabled": false}}]'
+appgw_id=$(az network application-gateway show -n $appgw_name -g $rg --query id -o tsv)
+az monitor diagnostic-settings create -n mydiag --resource $appgw_id --workspace $logws_id \
+    --metrics '[{"category": "AllMetrics", "enabled": true, "retentionPolicy": {"days": 0, "enabled": false }, "timeGrain": null}]' \
+    --logs '[{"category": "ApplicationGatewayAccessLog", "enabled": true, "retentionPolicy": {"days": 0, "enabled": false}},
+            {"category": "ApplicationGatewayPerformanceLog", "enabled": true, "retentionPolicy": {"days": 0, "enabled": false}},
+            {"category": "ApplicationGatewayFirewallLog", "enabled": true, "retentionPolicy": {"days": 0, "enabled": false}}]'
+
 
 # Cleanup everything
 # az group delete -n $rg -y --no-wait
