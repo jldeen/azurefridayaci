@@ -13,7 +13,6 @@ env:
 
   # app specific
   acrName: azurefriday21
-  aci_name: sslaci
   dash_name: dash
 
   # vnet
@@ -23,6 +22,8 @@ env:
   #sql
   sql_server_name: sqlserver-gfq3snhzfq
   sql_db_name: mydb
+  sql_subnet_name: sql
+  sql_subnet_prefix: 192.168.3.0/24
 
   # storage
   storage_account_name: acilabgfq3snhzfq
@@ -30,14 +31,14 @@ env:
   # appgw
   appgw_name: appgw
   appgw_subnet_name: appgw
+  appgw_subnet_prefix: 192.168.1.0/24
   appgw_pip_name: appgw-pip
   appgw_pip_dns: appgw-jldhd
 
   # aci
+  aci_name: sslaci
   aci_subnet_name: aci
   aci_subnet_prefix: 192.168.2.0/24
-  sql_subnet_name: sql
-  sql_subnet_prefix: 192.168.3.0/24
 
 jobs:
   deployInfra:
