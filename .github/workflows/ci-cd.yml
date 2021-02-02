@@ -31,7 +31,6 @@ env:
   appgw_pip_name: ${appgw_name}-pip
   appgw_pip_dns: ${appgw_name}-gfq3snhzfq
 
-
   # aci
   aci_subnet_name: aci
   aci_subnet_prefix: 192.168.2.0/24
@@ -241,6 +240,7 @@ jobs:
         fi
 
   build:
+    name: Build / Push to ACR
     runs-on: ubuntu-latest
     needs: deployInfra
     steps:
@@ -304,49 +304,84 @@ jobs:
     - name: "push dashboard"
       run: docker push $CONTAINER_REGISTRY/azurefriday/dash:$GITHUB_SHA
 
-  # # Possibly setup release in ADO with gates and approvals
-  # deploy:
-  #   runs-on: ubuntu-latest
-  #   needs: build
-  #   steps:
-  #     - name: "Get ACR and App Insights Information"
-  #       run: |
-  #         echo "Retrieving Container Registry info..."
-  #         acrName=$(az acr list -g $resourceGroup -o tsv --query [0].name)
-  #         CONTAINER_REGISTRY=$(az acr list -g $resourceGroup -o tsv --query [0].loginServer)
-  #         # acr/container registry variables
-  #         echo "::set-env name=CONTAINER_REGISTRY::$(az acr list -g $resourceGroup -o tsv --query [0].loginServer)"
-  #         echo "::set-env name=REGISTRY_USERNAME::$(az acr credential show -n $acrName --query username -o tsv)"
-  #         echo "::set-env name=REGISTRY_PASSWORD::$(az acr credential show -n $acrName -o tsv --query passwords[0].value)"
+  deploy:
+    name: Deploy Azure Container Instances
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      # checkout branch
+      - name: git checkout main branch
+        uses: actions/checkout@v2
 
-  #         echo "Retrieving Application Insights info..."
-  #         instrumentationKey=$(az monitor app-insights component show --app $webappName --resource-group $resourceGroup --query instrumentationKey -o tsv)
+      # log into Azure
+      - name: "Login via Azure CLI"
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-  #     - name: "Deploy to Azure Container Instances"
-  #       uses: "azure/aci-deploy@v1"
-  #       with:
-  #         resource-group: $resourceGroup
-  #         dns-name-label: $aci_dns
-  #         image: $CONTAINER_REGISTRY/sqlapi
-  #         registry-username: ${{ env.REGISTRY_USERNAME }}
-  #         registry-password: ${{ env.REGISTRY_PASSWORD }}
-  #         name: $aci_name
-  #         location: $location
+      - name: "Get ACR Container Information"
+        run: |
+          echo "Retrieving Container Registry info..."
+          acrName=$(az acr list -g $resourceGroup -o tsv --query [0].name)
+          CONTAINER_REGISTRY=$(az acr list -g $resourceGroup -o tsv --query [0].loginServer)
+          # acr/container registry variables
+          echo "CONTAINER_REGISTRY=$(az acr list -g $resourceGroup -o tsv --query [0].loginServer)" >> $GITHUB_ENV
+          echo "REGISTRY_USERNAME=$(az acr credential show -n $acrName --query username -o tsv)" >> $GITHUB_ENV
+          echo "REGISTRY_PASSWORD=$(az acr credential show -n $acrName -o tsv --query passwords[0].value)" >> $GITHUB_ENV
 
-  # - name: "Create Application Gateway"
-  #     run: |
-  #       allocation_method=Static
+      - name: "Generate Azure CLI Deployment Yaml"
+        run: |
+          storageKey=$(az storage account keys list --resource-group $resourceGroup --account-name $storage_account_name --query "[0].value" --output tsv)
+                      
+          echo "Generating deployment.yaml..."
 
-  #       az network public-ip create -g $rg -n $appgw_pip_name --sku Standard --allocation-method $allocation_method --dns-name $appgw_pip_dns
+          sed -i "s|<ACI_NAME>|$aci_name|g" IaC/dev.yaml && echo "aci name added"
 
-  #       appgw_fqdn=$(az network public-ip show -g $rg -n $appgw_pip_name --query dnsSettings.fqdn -o tsv)
+          sed -i "s|<DOCKER_REGISTRY_URL>|$CONTAINER_REGISTRY|g" IaC/dev.yaml && echo "registry url added"
 
-  #       az network application-gateway create -g $rg -n $appgw_name --min-capacity 1 --max-capacity 2 --sku Standard_v2 \
-  #           --frontend-port 8050 --routing-rule-type basic \
-  #           --http-settings-port 8050 --http-settings-protocol Http \
-  #           --public-ip-address $appgw_pip_name --vnet-name $vnet_name --subnet $appgw_subnet_name \
-  #           --servers "$dash_ip"
+          sed -i "s|<DOCKER_REGISTRY_USERNAME>|$REGISTRY_USERNAME|g" IaC/dev.yaml && echo "registry username added"
 
+          sed -i "s|<DOCKER_REGISTRY_PASSWORD>|$REGISTRY_PASSWORD|g" IaC/dev.yaml && echo "registry password added"   
+
+          sed -i "s|<NETWORK_PROFILE_ID>|$nw_profile_id|g" IaC/dev.yaml && echo "Network Profile ID added"     
+
+          sed -i "s|<SQL_SERVER_FQDN>|$sql_server_fqdn|g" IaC/dev.yaml && echo "sql server fqdn added"
+
+          sed -i "s|<SQL_SERVER_USERNAME>|${{ SECRETS.SQL_USER }}|g" IaC/dev.yaml && echo "sql username added"
+
+          sed -i "s|<SQL_SERVER_PASSWORD>|${{ SECRETS.SQL_PASSWORD }}|g" IaC/dev.yaml && echo "sql server password added"
+
+          sed -i "s|<STORAGE_ACCOUNT_KEY>|$storageKey|g" IaC/dev.yaml && echo "storage account key added"
+
+          sed -i "s|<STORAGE_ACCOUNT_NAME>|$storage_account_name|g" IaC/dev.yaml && echo "storage account name added"
+
+          sed -i "s|<GIT_SHA>|$GITHUB_SHA|g" IaC/dev.yaml && echo "GITHUB SHA added"
+
+      # - name: "Deploy to Azure Container Instances"
+      #   uses: "azure/aci-deploy@v1"
+      #   with:
+      #     resource-group: $resourceGroup
+      #     dns-name-label: $aci_dns
+      #     image: $CONTAINER_REGISTRY/azurefriday/api
+      #     registry-username: ${{ env.REGISTRY_USERNAME }}
+      #     registry-password: ${{ env.REGISTRY_PASSWORD }}
+      #     name: $aci_name
+      #     location: $location
+      
       # - name: "Deploy SQL ACI"
       #   run: |
       #     az container create -g $resourceGroup -f iac/dev.yaml
+
+      # - name: "Create Application Gateway"
+      #   run: |
+      #     allocation_method=Static
+
+      #     az network public-ip create -g $rg -n $appgw_pip_name --sku Standard --allocation-method $allocation_method --dns-name $appgw_pip_dns
+
+      #     appgw_fqdn=$(az network public-ip show -g $rg -n $appgw_pip_name --query dnsSettings.fqdn -o tsv)
+
+      #     az network application-gateway create -g $rg -n $appgw_name --min-capacity 1 --max-capacity 2 --sku Standard_v2 \
+      #         --frontend-port 8050 --routing-rule-type basic \
+      #         --http-settings-port 8050 --http-settings-protocol Http \
+      #         --public-ip-address $appgw_pip_name --vnet-name $vnet_name --subnet $appgw_subnet_name \
+      #         --servers "$dash_ip"
