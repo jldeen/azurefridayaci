@@ -47,7 +47,7 @@ properties:
           memoryInGB: 1.5
       volumeMounts:
       - name: nginx-config
-        mountPath: /etc/nginx
+        mountPath: /etc/nginx/conf.d
   - name: web
     properties:
       image: <DOCKER_REGISTRY_URL>/azurefriday/web:<GIT_SHA>
@@ -82,17 +82,22 @@ properties:
           memoryInGB: 1
       volumeMounts:
   volumes:
-  - secret:
-      ssl.crt: "$ssl_crt"
-      ssl.key: "$ssl_key"
-      nginx.conf: "$nginx_conf"
-    name: nginx-config
-  - name: initscript
+  - name: nginx-config
     azureFile:
-      readOnly: true
-      shareName: initscript
+      shareName: nginx-config
       storageAccountName: <STORAGE_ACCOUNT_NAME>
       storageAccountKey: <STORAGE_ACCOUNT_KEY>
+  # - secret:
+  #     ssl.crt: "$ssl_crt"
+  #     ssl.key: "$ssl_key"
+  #     nginx.conf: "$nginx_conf"
+  #   name: nginx-config
+  # - name: initscript
+  #   azureFile:
+  #     readOnly: true
+  #     shareName: initscript
+  #     storageAccountName: <STORAGE_ACCOUNT_NAME>
+  #     storageAccountKey: <STORAGE_ACCOUNT_KEY>
   ipAddress:
     ports:
     - port: 443

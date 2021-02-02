@@ -14,6 +14,7 @@ env:
   # app specific
   acrName: azurefriday21
   aci_name: sslaci
+  dash_name: dash
 
   # vnet
   vnet_name: acivnet
@@ -28,8 +29,9 @@ env:
 
   # appgw
   appgw_name: appgw
-  appgw_pip_name: ${appgw_name}-pip
-  appgw_pip_dns: ${appgw_name}-gfq3snhzfq
+  appgw_subnet_name: appgw
+  appgw_pip_name: appgw-pip
+  appgw_pip_dns: appgw-jldhd
 
   # aci
   aci_subnet_name: aci
@@ -60,7 +62,7 @@ jobs:
         --name $resourceGroup \
         --location $location > /dev/null && echo "Resource Group Created."
 
-        vnetCheck=$(az network vnet list -g $resourceGroup -o tsv --query [0].name)
+        vnetCheck=$(az network vnet list -g $resourceGroup -o tsv --query '[0].name')
 
         if [[  $vnetCheck  ]]; then
           echo 'Virtual Network already exists'
@@ -211,6 +213,17 @@ jobs:
           --account-key $storage_account_key \
           --name initscript
         
+        az storage share create \
+          --account-name $storage_account_name \
+          --account-key $storage_account_key \
+          --name nginx-config
+
+        az storage file upload \
+          --account-name $storage_account_name \
+          --account-key $storage_account_key \
+          -s nginx-config \
+          --source IaC/nginx.conf
+        
         echo "vnet_id=$(az network vnet show -n $vnet_name -g $resourceGroup --query id -o tsv)" >> $GITHUB_ENV 
         echo "subnet_id=$(az network vnet subnet show -n $aci_subnet_name --vnet-name $vnet_name -g $resourceGroup --query id -o tsv)" >> $GITHUB_ENV
 
@@ -332,6 +345,12 @@ jobs:
       - name: "Generate Azure CLI Deployment Yaml"
         run: |
           storageKey=$(az storage account keys list --resource-group $resourceGroup --account-name $storage_account_name --query "[0].value" --output tsv)
+
+          nw_profile_id=$(az network profile list -g $resourceGroup --query '[0].id' -o tsv)
+
+          sql_server_fqdn=$(az sql server show -n $sql_server_name -g $resourceGroup -o tsv --query fullyQualifiedDomainName)
+
+          echo "sql_server_fqdn=$(az sql server show -n $sql_server_name -g $resourceGroup -o tsv --query fullyQualifiedDomainName)" >> $GITHUB_ENV
                       
           echo "Generating deployment.yaml..."
 
@@ -355,7 +374,33 @@ jobs:
 
           sed -i "s|<STORAGE_ACCOUNT_NAME>|$storage_account_name|g" IaC/dev.yaml && echo "storage account name added"
 
-          sed -i "s|<GIT_SHA>|$GITHUB_SHA|g" IaC/dev.yaml && echo "GITHUB SHA added"
+          sed -i "s|<GIT_SHA>|$GITHUB_SHA|g" IaC/dev.yaml && echo "github sha added"
+      
+      - name: "ACI API and Web Group Deploy"
+        run: az container create -g $resourceGroup --file IaC/dev.yaml --no-wait
+
+      - name: "Deploy Observability Dashboard"
+        run: |
+          vnet_id=$(az network vnet show -n $vnet_name -g $resourceGroup --query id -o tsv)
+          subnet_id=$(az network vnet subnet show -n $aci_subnet_name --vnet-name $vnet_name -g $resourceGroup --query id -o tsv)
+          
+          az container create \
+            -n $dash_name \
+            -g $resourceGroup \
+            --image $CONTAINER_REGISTRY/azurefriday/dash:$GITHUB_SHA \
+            --vnet $vnet_id \
+            --subnet $subnet_id \
+            --ip-address private \
+            --ports 8050  \
+            -e "SQL_SERVER_FQDN=$sql_server_fqdn" \
+            "SQL_SERVER_USERNAME=${{ SECRETS.SQL_USER }}" \
+            "SQL_SERVER_PASSWORD=${{ SECRETS.SQL_PASSWORD }}" \
+            "SQL_SERVER_DB=${sql_db_name}" \
+            --registry-login-server $CONTAINER_REGISTRY \
+            --registry-username $REGISTRY_USERNAME \
+            --registry-password $REGISTRY_PASSWORD
+
+            echo "dash_ip=$(az container show -n $dash_name -g $resourceGroup --query 'ipAddress.ip' -o tsv)" >> $GITHUB_ENV
 
       # - name: "Deploy to Azure Container Instances"
       #   uses: "azure/aci-deploy@v1"
@@ -368,20 +413,30 @@ jobs:
       #     name: $aci_name
       #     location: $location
       
-      # - name: "Deploy SQL ACI"
-      #   run: |
-      #     az container create -g $resourceGroup -f iac/dev.yaml
+      - name: "Create Application Gateway"
+        run: |
+          allocation_method=Static
 
-      # - name: "Create Application Gateway"
-      #   run: |
-      #     allocation_method=Static
+          az network public-ip create \
+            -g $resourceGroup \
+            -n $appgw_pip_name \
+            --sku Standard \
+            --allocation-method $allocation_method \
+            --dns-name $appgw_pip_dns
 
-      #     az network public-ip create -g $rg -n $appgw_pip_name --sku Standard --allocation-method $allocation_method --dns-name $appgw_pip_dns
+          appgw_fqdn=$(az network public-ip show -g $resourceGroup -n $appgw_pip_name --query dnsSettings.fqdn -o tsv)
 
-      #     appgw_fqdn=$(az network public-ip show -g $rg -n $appgw_pip_name --query dnsSettings.fqdn -o tsv)
-
-      #     az network application-gateway create -g $rg -n $appgw_name --min-capacity 1 --max-capacity 2 --sku Standard_v2 \
-      #         --frontend-port 8050 --routing-rule-type basic \
-      #         --http-settings-port 8050 --http-settings-protocol Http \
-      #         --public-ip-address $appgw_pip_name --vnet-name $vnet_name --subnet $appgw_subnet_name \
-      #         --servers "$dash_ip"
+          az network application-gateway create \
+            -g $resourceGroup \
+            -n $appgw_name \
+            --min-capacity 1 \
+            --max-capacity 2 \
+            --sku Standard_v2 \
+            --frontend-port 8050 \
+            --routing-rule-type basic \
+            --http-settings-port 8050 \
+            --http-settings-protocol Http \
+            --public-ip-address $appgw_pip_name \
+            --vnet-name $vnet_name \
+            --subnet $appgw_subnet_name \
+            --servers "$dash_ip"
