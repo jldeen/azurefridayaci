@@ -1,4 +1,4 @@
-name: Azure Friday CI CD
+name: Azure Friday Full CI CD
 
 on: [push]
   # pull_request:
@@ -7,23 +7,30 @@ on: [push]
 
 env:
   # basic  
-  resourceGroup: itsfriday21
+  resourceGroup: azurefriday
   location: eastus
   subName: "ca-jessde-demo-test"
 
   # app specific
+  acrName: azurefriday21
   aci_name: sslaci
-  acr_name: itsfriday21
 
-  # db var
-  sql_server_name: sqlserver$RANDOM
-  sql_db_name: acisqldb
-
-  #network variables
+  # vnet
   vnet_name: acivnet
   vnet_prefix: 192.168.0.0/16
-  vm_subnet_name: vm
-  vm_subnet_prefix: 192.168.1.0/24
+
+  #sql
+  sql_server_name: sqlserver-gfq3snhzfq
+  sql_db_name: mydb
+
+  # storage
+  storage_account_name: acilabgfq3snhzfq
+
+  # appgw
+  appgw_subnet_name: appgw
+  appgw_subnet_prefix: 192.168.1.0/24
+
+  # aci
   aci_subnet_name: aci
   aci_subnet_prefix: 192.168.2.0/24
   sql_subnet_name: sql
@@ -45,143 +52,284 @@ jobs:
         creds: ${{ secrets.AZURE_CREDENTIALS }}
 
     # create resourceGroup
-    # create resource group and VM
-    - name: "Create Resource Group and VM"
+    - name: "Create Resource Group and Network vnet"
       run: |
-        az group create --subscription "$subName" --name $resourceGroup --location $location > /dev/null && echo "Resource Group Created."
+        az group create \
+        --subscription "$subName" \
+        --name $resourceGroup \
+        --location $location > /dev/null && echo "Resource Group Created."
 
-        az vm create -n test-vm -g $resourceGroup -l $location --image ubuntuLTS --generate-ssh-keys \
-        --public-ip-address test-vm-pip --vnet-name $vnet_name \
-        --vnet-address-prefix $vnet_prefix --subnet $vm_subnet_name --subnet-address-prefix $vm_subnet_prefix
-        
+        vnetCheck=$(az network vnet list -g $resourceGroup -o tsv --query [0].name)
 
-        vm_pip=$(az network public-ip show -n test-vm-pip -g $resourceGroup --query ipAddress -o tsv) && echo "VM Public IP has been created. Your PIP is: $vm_pip"
+        if [[  $vnetCheck  ]]; then
+          echo 'Virtual Network already exists'
+        else
+          echo 'Virtual network does not exist. Creating virtual network now.'
+          # create vnet
+          az network vnet create \
+            -n $vnet_name \
+            -g $resourceGroup \
+            --address-prefix $vnet_prefix > /dev/null && echo "vnet created."
 
-        # persist to future steps
-        echo "::set-env name=vm_pip::$$(az network public-ip show -n test-vm-pip -g $resourceGroup --query ipAddress -o tsv)"
+          az network vnet subnet create \
+            --vnet-name $vnet_name \
+            -g $resourceGroup \
+            -n $appgw_subnet_name \
+            --address-prefix $appgw_subnet_prefix > /dev/null && echo "vnet subnet created for appgw."
 
-    # Create Database
-    - name: "Create Database and set firewall rules"
-      run: |
-        az sql server create -n $sql_server_name -g $resourceGroup -l $location --admin-user ${{ SECRETS.SQL_USER }} --admin-password ${{ SECRETS.SQL_PASSWORD }}
+          az network vnet subnet create \
+            --vnet-name $vnet_name \
+            -g $resourceGroup \
+            -n $aci_subnet_name \
+            --address-prefix $aci_subnet_prefix > /dev/null && echo "vnet subnet created for aci."
 
-        sql_server_fqdn=$(az sql server show -n $sql_server_name -g $resourceGroup -o tsv --query fullyQualifiedDomainName)
-        echo "::set-env name=sql_server_fqdn::$$(az sql server show -n $sql_server_name -g $resourceGroup -o tsv --query fullyQualifiedDomainName)"
+          az network vnet subnet create \
+            --vnet-name $vnet_name \
+            -g $resourceGroup \
+            -n $sql_subnet_name \
+            --address-prefix $sql_subnet_prefix > /dev/null && echo "vnet subnet created for sql."
+        fi
 
-        az sql db create \
-          -n $sql_db_name \
-          -s $sql_server_name \
-          -g $resourceGroup -e Basic \
-          -c 5 --no-wait
-
-        aci_pip=$(ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $vm_pip "curl -s http://$aci_ip:8080/api/ip" | jq -r .my_public_ip) && echo $aci_pip
-
-        az sql server firewall-rule create \
-        -g $resourceGroup \
-        -s $sql_server_name \
-        -n public_sqlapi_aci-source \
-        --start-ip-address $aci_pip \
-        --end-ip-address $aci_pip
-
-        ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $vm_pip "curl -s http://$aci_ip:8080/api/sqlversion"
-
-        ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $vm_pip "curl -s http://$aci_ip:8080/api/sqlsrcip"
-    
     # create azure container registry
     - name: "Create Azure Container Registry"
       run: |
         az acr create \
           --resource-group $resourceGroup \
           --name $acrName \
-          --sku Basic \
+          --sku Premium \
           --subscription "$subName" \
           --admin-enabled true
-
-    # Create ACI
-    - name: "Create Azure Container Instance for SQL API"
-      run: |
-        az network vnet subnet create -g $resourceGroup --vnet-name $vnet_name -n $aci_subnet_name --address-prefix $aci_subnet_prefix
-
-        vnet_id=$(az network vnet show -n $vnet_name -g $resourceGroup --query id -o tsv)
-
-        aci_subnet_id=$(az network vnet subnet show -n $aci_subnet_name --vnet-name $vnet_name -g $resourceGroup --query id -o tsv)
-
-        // may move
-        az container create -n $aci_name -g $resourceGroup -e "SQL_SERVER_USERNAME=${{ SECRETS.SQL_USER }}" \
-        "SQL_SERVER_PASSWORD=${{ SECRETS.SQL_PASSWORD }}" \
-        "SQL_SERVER_FQDN=${sql_server_fqdn}" \
-        --image erjosito/sqlapi:1.0 \
-        --ip-address private --ports 8080 --vnet $vnet_id --subnet $aci_subnet_id
-
-  build:
-    runs-on: ubuntu-latest
-    needs: deployInfra
-    steps:
-    # checkout branch
-    - name: git checkout main branch
-      uses: actions/checkout@v2
-
-    # log into Azure
-    - name: "Login via Azure CLI"
-      uses: azure/login@v1
-      with:
-        creds: ${{ secrets.AZURE_CREDENTIALS }}
-
-    - name: "Get ACR Container Information"
-      run: |
-        echo "Retrieving Container Registry info..."
-        acrName=$(az acr list -g $resourceGroup -o tsv --query [0].name)
-        CONTAINER_REGISTRY=$(az acr list -g $resourceGroup -o tsv --query [0].loginServer)
-        # acr/container registry variables
-        echo "::set-env name=CONTAINER_REGISTRY::$(az acr list -g $resourceGroup -o tsv --query [0].loginServer)"
-        echo "::set-env name=REGISTRY_USERNAME::$(az acr credential show -n $acrName --query username -o tsv)"
-        echo "::set-env name=REGISTRY_PASSWORD::$(az acr credential show -n $acrName -o tsv --query passwords[0].value)"
     
-    - name: "docker login"
-      uses: azure/docker-login@v1
-      with:
-        login-server: ${{ env.CONTAINER_REGISTRY }}
-        username: ${{ env.REGISTRY_USERNAME }}
-        password: ${{ env.REGISTRY_PASSWORD }}
+    # create database
+    - name: "Create SQL Database"
+      run: |
+        az sql server create \
+          -n $sql_server_name \
+          -g $resourceGroup \
+          -l $location \
+          --admin-user ${{ SECRETS.SQL_USER }} --admin-password ${{ SECRETS.SQL_PASSWORD}}
 
-    - name: "build"
-      run: docker build -t $CONTAINER_REGISTRY/sqlapi:$GITHUB_SHA .
-
-    - uses: azure/container-scan@v0
-      with:
-        image-name: $CONTAINER_REGISTRY/sqlapi:$GITHUB_SHA
+        echo "sql_server_fqdn=$(az sql server show -n $sql_server_name -g $resourceGroup -o tsv --query fullyQualifiedDomainName)" >> $GITHUB_ENV
+        
+        az sql db create \
+          -n $sql_db_name \
+          -s $sql_server_name \
+          -g $resourceGroup \
+          -e Basic -c 5 --no-wait
     
-    - name: "push"
-      run: docker push $CONTAINER_REGISTRY/sqlapi:$GITHUB_SHA
+    # create SQL server private endpoint
+    - name: "Create SQL Server private endpoint"
+      run: |
+        sql_endpoint_name=sqlep
 
-  # Possibly setup release in ADO with gates and approvals
-  deploy:
-    runs-on: ubuntu-latest
-    needs: build
-    steps:
-      - name: "Get ACR and App Insights Information"
-        run: |
-          echo "Retrieving Container Registry info..."
-          acrName=$(az acr list -g $resourceGroup -o tsv --query [0].name)
-          CONTAINER_REGISTRY=$(az acr list -g $resourceGroup -o tsv --query [0].loginServer)
-          # acr/container registry variables
-          echo "::set-env name=CONTAINER_REGISTRY::$(az acr list -g $resourceGroup -o tsv --query [0].loginServer)"
-          echo "::set-env name=REGISTRY_USERNAME::$(az acr credential show -n $acrName --query username -o tsv)"
-          echo "::set-env name=REGISTRY_PASSWORD::$(az acr credential show -n $acrName -o tsv --query passwords[0].value)"
+        sql_server_id=$(az sql server show -n $sql_server_name -g $resourceGroup -o tsv --query id)
+        echo "sql_server_id=$(az sql server show -n $sql_server_name -g $resourceGroup -o tsv --query id)" >> $GITHUB_ENV
+        
+        az network vnet subnet update \
+          -n $sql_subnet_name \
+          -g $resourceGroup \
+          --vnet-name $vnet_name \
+          --disable-private-endpoint-network-policies true
+        
+        az network private-endpoint create \
+          -n $sql_endpoint_name \
+          -g $resourceGroup \
+          --vnet-name $vnet_name \
+          --subnet $sql_subnet_name \
+          --private-connection-resource-id $sql_server_id \
+          --group-id sqlServer \
+          --connection-name sqlConnection
+        
+        sql_nic_id=$(az network private-endpoint show -n $sql_endpoint_name -g $resourceGroup --query 'networkInterfaces[0].id' -o tsv)
 
-          echo "Retrieving Application Insights info..."
-          instrumentationKey=$(az monitor app-insights component show --app $webappName --resource-group $resourceGroup --query instrumentationKey -o tsv)
+        echo "sql_endpoint_name=sqlep" >> $GITHUB_ENV
+        echo "sql_nic_id=$(az network private-endpoint show -n $sql_endpoint_name -g $resourceGroup --query 'networkInterfaces[0].id' -o tsv)" >> $GITHUB_ENV
+        echo "sql_endpoint_ip=$(az network nic show --ids $sql_nic_id --query 'ipConfigurations[0].privateIpAddress' -o tsv)" >> $GITHUB_ENV
+  
 
-      - name: "Deploy to Azure Container Instances"
-        uses: "azure/aci-deploy@v1"
-        with:
-          resource-group: $resourceGroup
-          dns-name-label: $aci_dns
-          image: $CONTAINER_REGISTRY/sqlapi
-          registry-username: ${{ env.REGISTRY_USERNAME }}
-          registry-password: ${{ env.REGISTRY_PASSWORD }}
-          name: $aci_name
-          location: $location
+    - name: "Create Azure Private DNS Zones for private link"
+      run: |
+        plink_dns_zone_name=jessicadeen.database.windows.net
+
+        plink_dns_check=$(az network private-dns zone list -g $resourceGroup -o tsv --query '[0].name')
+
+        echo "Your sql endpoint IP is: $sql_endpoint_ip"
+
+        if [[  $plink_dns_check  ]]; then
+          echo "Azure DNS Zone for Private Link Already Exists."
+        else
+          az network private-dns zone create \
+          -n $plink_dns_zone_name \
+          -g $resourceGroup 
+
+          az network private-dns link vnet create \
+            -g $resourceGroup \
+            -z $plink_dns_zone_name \
+            -n privatelink \
+            --virtual-network $vnet_name \
+            --registration-enabled false
+
+          az network private-dns record-set a create \
+            -n $sql_server_name \
+            -z $plink_dns_zone_name \
+            -g $resourceGroup
+
+          az network private-dns record-set a add-record \
+            --record-set-name $sql_server_name \
+            -z $plink_dns_zone_name \
+            -g $resourceGroup \
+            -a $sql_endpoint_ip
+
+          dns_zone_name=jessicadeen.com
+
+          az network private-dns zone create \
+            -n $dns_zone_name \
+            -g $resourceGroup 
+
+          az network private-dns link vnet create \
+            -g $resourceGroup \
+            -z $dns_zone_name \
+            -n jessicadeen \
+            --virtual-network $vnet_name \
+            --registration-enabled false
+        fi
+      
+      # Create storage account
+    - name: "Create storage account"
+      run: |
+        az storage account create \
+          -n $storage_account_name \
+          -g $resourceGroup \
+          --sku Premium_LRS \
+          --kind FileStorage
+
+        storage_account_key=$(az storage account keys list --account-name $storage_account_name -g $resourceGroup --query '[0].value' -o tsv)
+
+        az storage share create \
+          --account-name $storage_account_name \
+          --account-key $storage_account_key \
+          --name initscript
+        
+        echo "vnet_id=$(az network vnet show -n $vnet_name -g $resourceGroup --query id -o tsv)" >> $GITHUB_ENV 
+        echo "subnet_id=$(az network vnet subnet show -n $aci_subnet_name --vnet-name $vnet_name -g $resourceGroup --query id -o tsv)" >> $GITHUB_ENV
+
+    - name: "Create Network Profile"
+      run: |
+        az container create \
+          -n dummy \
+          -g $resourceGroup \
+          --image alpine:latest \
+          --ip-address private \
+          --ports 80 \
+          --vnet $vnet_id \
+          --subnet $subnet_id
+
+        # If the previous command fails with an error, it is no problem, as long as a network profile is created (see below)
+
+        az container delete \
+          -n dummy \
+          -g $resourceGroup -y
+
+        nw_profile_id=$(az network profile list -g $resourceGroup --query '[0].id' -o tsv)
+        echo "nw_profile_id=$(az network profile list -g $resourceGroup --query '[0].id' -o tsv)" >> $GITHUB_ENV
+
+        if [[ -z "$nw_profile_id" ]]
+        then
+            echo "No network profile could be created!!"
+        fi
+
+  # build:
+  #   runs-on: ubuntu-latest
+  #   needs: deployInfra
+  #   steps:
+  #   # checkout branch
+  #   - name: git checkout main branch
+  #     uses: actions/checkout@v2
+
+  #   # log into Azure
+  #   - name: "Login via Azure CLI"
+  #     uses: azure/login@v1
+  #     with:
+  #       creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+  #   - name: "Get ACR Container Information"
+  #     run: |
+  #       echo "Retrieving Container Registry info..."
+  #       acrName=$(az acr list -g $resourceGroup -o tsv --query [0].name)
+  #       CONTAINER_REGISTRY=$(az acr list -g $resourceGroup -o tsv --query [0].loginServer)
+  #       # acr/container registry variables
+  #       echo "CONTAINER_REGISTRY::$(az acr list -g $resourceGroup -o tsv --query [0].loginServer)" >> $GITHUB_ENV
+  #       echo "REGISTRY_USERNAME::$(az acr credential show -n $acrName --query username -o tsv)" $GITHUB_ENV
+  #       echo "REGISTRY_PASSWORD::$(az acr credential show -n $acrName -o tsv --query passwords[0].value)" $GITHUB_ENV
+    
+  #   - name: "docker login"
+  #     uses: azure/docker-login@v1
+  #     with:
+  #       login-server: ${{ env.CONTAINER_REGISTRY }}
+  #       username: ${{ env.REGISTRY_USERNAME }}
+  #       password: ${{ env.REGISTRY_PASSWORD }}
+
+  #   - name: "build web container"
+  #     run: docker build ./web -t $CONTAINER_REGISTRY/web:$GITHUB_SHA
+
+  #   - name: "build api container"
+  #     run: docker build ./api -t $CONTAINER_REGISTRY/api:$GITHUB_SHA
+
+  #   - name: "build dash container"
+  #     run: docker build ./dash -t $CONTAINER_REGISTRY/dash:$GITHUB_SHA
+
+  #   - name: Scan Web Container
+  #     uses: azure/container-scan@v0
+  #     with:
+  #       image-name: $CONTAINER_REGISTRY/web:$GITHUB_SHA
+    
+  #   - name: Scan API Container
+  #     uses: azure/container-scan@v0
+  #     with:
+  #       image-name: $CONTAINER_REGISTRY/api:$GITHUB_SHA
+    
+  #   - name: Scan Dashboard Container
+  #     uses: azure/container-scan@v0
+  #     with:
+  #       image-name: $CONTAINER_REGISTRY/dash:$GITHUB_SHA
+    
+  #   - name: "push web"
+  #     run: docker push $CONTAINER_REGISTRY/web:$GITHUB_SHA
+
+  #   - name: "push api"
+  #     run: docker push $CONTAINER_REGISTRY/api:$GITHUB_SHA
+
+  #   - name: "push dashboard"
+  #     run: docker push $CONTAINER_REGISTRY/dash:$GITHUB_SHA
+
+  # # Possibly setup release in ADO with gates and approvals
+  # deploy:
+  #   runs-on: ubuntu-latest
+  #   needs: build
+  #   steps:
+  #     - name: "Get ACR and App Insights Information"
+  #       run: |
+  #         echo "Retrieving Container Registry info..."
+  #         acrName=$(az acr list -g $resourceGroup -o tsv --query [0].name)
+  #         CONTAINER_REGISTRY=$(az acr list -g $resourceGroup -o tsv --query [0].loginServer)
+  #         # acr/container registry variables
+  #         echo "::set-env name=CONTAINER_REGISTRY::$(az acr list -g $resourceGroup -o tsv --query [0].loginServer)"
+  #         echo "::set-env name=REGISTRY_USERNAME::$(az acr credential show -n $acrName --query username -o tsv)"
+  #         echo "::set-env name=REGISTRY_PASSWORD::$(az acr credential show -n $acrName -o tsv --query passwords[0].value)"
+
+  #         echo "Retrieving Application Insights info..."
+  #         instrumentationKey=$(az monitor app-insights component show --app $webappName --resource-group $resourceGroup --query instrumentationKey -o tsv)
+
+  #     - name: "Deploy to Azure Container Instances"
+  #       uses: "azure/aci-deploy@v1"
+  #       with:
+  #         resource-group: $resourceGroup
+  #         dns-name-label: $aci_dns
+  #         image: $CONTAINER_REGISTRY/sqlapi
+  #         registry-username: ${{ env.REGISTRY_USERNAME }}
+  #         registry-password: ${{ env.REGISTRY_PASSWORD }}
+  #         name: $aci_name
+  #         location: $location
 
       # - name: "Deploy SQL ACI"
       #   run: |
