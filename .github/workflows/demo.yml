@@ -163,7 +163,7 @@ jobs:
           location: ${{ env.location }}
           ports: 8050
           environment-variables: SQL_SERVER_FQDN=${{ env.sql_server_fqdn }} SQL_SERVER_DB=${{ env.sql_db_name }}
-          secure-environment-variables: SQL_SERVER_USERNAME=${{ SECRETS.SQL_USER }} ${{ SECRETS.SQL_PASSWORD }}
+          secure-environment-variables: SQL_SERVER_USERNAME=${{ SECRETS.SQL_USER }} SQL_SERVER_PASSWORD=${{ SECRETS.SQL_PASSWORD }}
 
       - name: 'Deploy Api to Azure Container Instances'
         uses: 'azure/aci-deploy@v1'
@@ -178,4 +178,4 @@ jobs:
           location: ${{ env.location }}
           ports: 8080
           environment-variables: SQL_SERVER_FQDN=${{ env.sql_server_fqdn }} SQL_SERVER_DB=${{ env.sql_db_name }}
-          secure-environment-variables: SQL_SERVER_USERNAME=${{ SECRETS.SQL_USER }} ${{ SECRETS.SQL_PASSWORD }}
+          secure-environment-variables: SQL_SERVER_USERNAME=${{ SECRETS.SQL_USER }} SQL_SERVER_PASSWORD=${{ SECRETS.SQL_PASSWORD }}
