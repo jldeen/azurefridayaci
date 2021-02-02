@@ -36,7 +36,7 @@ env:
   appgw_pip_dns: appgw-jldhd
 
   # aci
-  aci_name: sslaci
+  aci_name: jdaci
   aci_subnet_name: aci
   aci_subnet_prefix: 192.168.2.0/24
 
@@ -197,36 +197,6 @@ jobs:
             --virtual-network $vnet_name \
             --registration-enabled false
         fi
-      
-      # Create storage account
-    - name: "Create storage account"
-      run: |
-        az storage account create \
-          -n $storage_account_name \
-          -g $resourceGroup \
-          --sku Premium_LRS \
-          --kind FileStorage
-
-        storage_account_key=$(az storage account keys list --account-name $storage_account_name -g $resourceGroup --query '[0].value' -o tsv)
-
-        az storage share create \
-          --account-name $storage_account_name \
-          --account-key $storage_account_key \
-          --name initscript
-        
-        az storage share create \
-          --account-name $storage_account_name \
-          --account-key $storage_account_key \
-          --name nginx-config
-
-        az storage file upload \
-          --account-name $storage_account_name \
-          --account-key $storage_account_key \
-          -s nginx-config \
-          --source IaC/nginx.conf
-        
-        echo "vnet_id=$(az network vnet show -n $vnet_name -g $resourceGroup --query id -o tsv)" >> $GITHUB_ENV 
-        echo "subnet_id=$(az network vnet subnet show -n $aci_subnet_name --vnet-name $vnet_name -g $resourceGroup --query id -o tsv)" >> $GITHUB_ENV
 
     - name: "Create Network Profile"
       run: |
@@ -237,6 +207,7 @@ jobs:
           --ip-address private \
           --ports 80 \
           --vnet $vnet_id \
+          --command-line "tail -f /dev/null" \
           --subnet $subnet_id
 
         # If the previous command fails with an error, it is no problem, as long as a network profile is created (see below)
@@ -252,7 +223,7 @@ jobs:
         then
             echo "No network profile could be created!!"
         fi
-
+        
   build:
     name: Build / Push to ACR
     runs-on: ubuntu-latest
@@ -285,19 +256,11 @@ jobs:
         username: ${{ env.REGISTRY_USERNAME }}
         password: ${{ env.REGISTRY_PASSWORD }}
 
-    - name: "build web container"
-      run: docker build ./web -t $CONTAINER_REGISTRY/azurefriday/web:$GITHUB_SHA
-
     - name: "build api container"
       run: docker build ./api -t $CONTAINER_REGISTRY/azurefriday/api:$GITHUB_SHA
 
     - name: "build dash container"
       run: docker build ./dash -t $CONTAINER_REGISTRY/azurefriday/dash:$GITHUB_SHA
-
-    # - name: Scan Web Container
-    #   uses: azure/container-scan@v0
-    #   with:
-    #     image-name: $CONTAINER_REGISTRY/azurefriday/web:$GITHUB_SHA
     
     # - name: Scan API Container
     #   uses: azure/container-scan@v0
@@ -308,9 +271,6 @@ jobs:
     #   uses: azure/container-scan@v0
     #   with:
     #     image-name: $CONTAINER_REGISTRY/azurefriday/dash:$GITHUB_SHA
-    
-    - name: "push web"
-      run: docker push $CONTAINER_REGISTRY/azurefriday/web:$GITHUB_SHA
 
     - name: "push api"
       run: docker push $CONTAINER_REGISTRY/azurefriday/api:$GITHUB_SHA
@@ -318,8 +278,8 @@ jobs:
     - name: "push dashboard"
       run: docker push $CONTAINER_REGISTRY/azurefriday/dash:$GITHUB_SHA
 
-  deploy:
-    name: Deploy Azure Container Instances
+  deployStaging:
+    name: Deploy Azure Container Instances (Staging)
     runs-on: ubuntu-latest
     needs: build
     steps:
@@ -355,7 +315,7 @@ jobs:
                       
           echo "Generating deployment.yaml..."
 
-          sed -i "s|<ACI_NAME>|$aci_name|g" IaC/dev.yaml && echo "aci name added"
+          sed -i "s|<ACI_NAME>|$aci_name-dev|g" IaC/dev.yaml && echo "aci name added"
 
           sed -i "s|<DOCKER_REGISTRY_URL>|$CONTAINER_REGISTRY|g" IaC/dev.yaml && echo "registry url added"
 
@@ -371,15 +331,8 @@ jobs:
 
           sed -i "s|<SQL_SERVER_PASSWORD>|${{ SECRETS.SQL_PASSWORD }}|g" IaC/dev.yaml && echo "sql server password added"
 
-          sed -i "s|<STORAGE_ACCOUNT_KEY>|$storageKey|g" IaC/dev.yaml && echo "storage account key added"
-
-          sed -i "s|<STORAGE_ACCOUNT_NAME>|$storage_account_name|g" IaC/dev.yaml && echo "storage account name added"
-
           sed -i "s|<GIT_SHA>|$GITHUB_SHA|g" IaC/dev.yaml && echo "github sha added"
       
-      - name: "ACI API and Web Group Deploy"
-        run: az container create -g $resourceGroup --file IaC/dev.yaml --no-wait
-
       - name: "Deploy Observability Dashboard"
         run: |
           vnet_id=$(az network vnet show -n $vnet_name -g $resourceGroup --query id -o tsv)
@@ -403,17 +356,6 @@ jobs:
 
             echo "dash_ip=$(az container show -n $dash_name -g $resourceGroup --query 'ipAddress.ip' -o tsv)" >> $GITHUB_ENV
 
-      # - name: "Deploy to Azure Container Instances"
-      #   uses: "azure/aci-deploy@v1"
-      #   with:
-      #     resource-group: $resourceGroup
-      #     dns-name-label: $aci_dns
-      #     image: $CONTAINER_REGISTRY/azurefriday/api
-      #     registry-username: ${{ env.REGISTRY_USERNAME }}
-      #     registry-password: ${{ env.REGISTRY_PASSWORD }}
-      #     name: $aci_name
-      #     location: $location
-      
       - name: "Create Application Gateway"
         run: |
           allocation_method=Static
@@ -441,3 +383,96 @@ jobs:
             --vnet-name $vnet_name \
             --subnet $appgw_subnet_name \
             --servers "$dash_ip"
+      
+      - name: "ACI API and Web Group Deploy"
+        run: az container create -g $resourceGroup --file IaC/dev.yaml --no-wait
+
+      - name: "Update Application Gateay"
+        run: |
+          
+          az network application-gateway address-pool create \
+            -n acidevpool \
+            -g $resourceGroup \
+            --gateway-name $appgw_name \
+            --servers ${aci_name_prefix}-dev-01.contoso.com ${aci_name_prefix}-dev-02.contoso.com ${aci_name_prefix}-dev-03.contoso.com
+          
+          az network application-gateway frontend-port create \
+            -n acidevfrontendport \
+            -g $resourceGroup \
+            --gateway-name $appgw_name \
+            --port 8443
+          
+          az network application-gateway http-listener create \
+            -n acidevlistener \
+            -g $resourceGroup \
+            --gateway-name $appgw_name \
+            --frontend-port acidevfrontendport \
+            --frontend-ip $frontend_name \
+          
+          az network application-gateway rule create \
+            -g $resourceGroup \
+            --gateway-name $appgw_name \
+            -n acidevrule \
+            --http-listener acidevlistener \
+            --rule-type Basic \
+            --address-pool acidevpool \
+            --http-settings acisettings
+
+  deployProd:
+    name: Deploy Azure Container Instances (Production)
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      # checkout branch
+      - name: git checkout main branch
+        uses: actions/checkout@v2
+
+      # log into Azure
+      - name: "Login via Azure CLI"
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: "Get ACR Container Information"
+        run: |
+          echo "Retrieving Container Registry info..."
+          acrName=$(az acr list -g $resourceGroup -o tsv --query [0].name)
+          CONTAINER_REGISTRY=$(az acr list -g $resourceGroup -o tsv --query [0].loginServer)
+          # acr/container registry variables
+          echo "CONTAINER_REGISTRY=$(az acr list -g $resourceGroup -o tsv --query [0].loginServer)" >> $GITHUB_ENV
+          echo "REGISTRY_USERNAME=$(az acr credential show -n $acrName --query username -o tsv)" >> $GITHUB_ENV
+          echo "REGISTRY_PASSWORD=$(az acr credential show -n $acrName -o tsv --query passwords[0].value)" >> $GITHUB_ENV
+
+      - name: "Generate Azure CLI Deployment Yaml"
+        run: |
+          storageKey=$(az storage account keys list --resource-group $resourceGroup --account-name $storage_account_name --query "[0].value" --output tsv)
+
+          nw_profile_id=$(az network profile list -g $resourceGroup --query '[0].id' -o tsv)
+
+          sql_server_fqdn=$(az sql server show -n $sql_server_name -g $resourceGroup -o tsv --query fullyQualifiedDomainName)
+
+          echo "sql_server_fqdn=$(az sql server show -n $sql_server_name -g $resourceGroup -o tsv --query fullyQualifiedDomainName)" >> $GITHUB_ENV
+                      
+          echo "Generating deployment.yaml..."
+
+          sed -i "s|<ACI_NAME>|$aci_name-prod|g" IaC/dev.yaml && echo "aci name added"
+
+          sed -i "s|<DOCKER_REGISTRY_URL>|$CONTAINER_REGISTRY|g" IaC/dev.yaml && echo "registry url added"
+
+          sed -i "s|<DOCKER_REGISTRY_USERNAME>|$REGISTRY_USERNAME|g" IaC/dev.yaml && echo "registry username added"
+
+          sed -i "s|<DOCKER_REGISTRY_PASSWORD>|$REGISTRY_PASSWORD|g" IaC/dev.yaml && echo "registry password added"   
+
+          sed -i "s|<NETWORK_PROFILE_ID>|$nw_profile_id|g" IaC/dev.yaml && echo "Network Profile ID added"     
+
+          sed -i "s|<SQL_SERVER_FQDN>|$sql_server_fqdn|g" IaC/dev.yaml && echo "sql server fqdn added"
+
+          sed -˜i "s|<SQL_SERVER_USERNAME>|${{ SECRETS.SQL_USER }}|g" IaC/dev.yaml && echo "sql username added"
+
+          sed -i "s|<SQL_SERVER_PASSWORD>|${{ SECRETS.SQL_PASSWORD }}|g" IaC/dev.yaml && echo "sql server password added"
+
+          sed -i "s|<GIT_SHA>|$GITHUB_SHA|g" IaC/dev.yaml && echo "github sha added"
+      
+      # - name: "Update Application Gateway"
+      #   run: |
+      #     allocation_method=Static

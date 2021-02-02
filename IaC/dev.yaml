@@ -8,59 +8,7 @@ properties:
     password: <DOCKER_REGISTRY_PASSWORD>
   networkProfile:
     id: <NETWORK_PROFILE_ID>
-  # initContainers:
-  # - name: azcli
-  #   properties:
-  #     image: microsoft/azure-cli:latest
-  #     command:
-  #     - "/bin/sh"
-  #     - "-c"
-  #     - "/mnt/init/$init_script_filename"
-  #     environmentVariables:
-  #     - name: RG
-  #       value: $rg
-  #     - name: SP_APPID
-  #       value: $sp_appid
-  #     - name: SP_PASSWORD
-  #       secureValue: $sp_password
-  #     - name: SP_TENANT
-  #       value: $sp_tenant
-  #     - name: DNS_ZONE_NAME
-  #       value: $dns_zone_name
-  #     - name: HOSTNAME
-  #       value: $aci_name
-  #     - name: ACI_NAME
-  #       value: $aci_name
-  #     volumeMounts:
-  #     - name: initscript
-  #       mountPath: /mnt/init/
   containers:
-  - name: nginx
-    properties:
-      image: nginx
-      ports:
-      - port: 443
-        protocol: TCP
-      resources:
-        requests:
-          cpu: 1.0
-          memoryInGB: 1.5
-      volumeMounts:
-      - name: nginx-config
-        mountPath: /etc/nginx/conf.d
-  - name: web
-    properties:
-      image: <DOCKER_REGISTRY_URL>/azurefriday/web:<GIT_SHA>
-      environmentVariables:
-      - name: API_URL
-        value: 127.0.0.1:8080
-      ports:
-      - port: 80
-        protocol: TCP
-      resources:
-        requests:
-          cpu: 0.5
-          memoryInGB: 0.5
   - name: sqlapi
     properties:
       image: <DOCKER_REGISTRY_URL>/azurefriday/api:<GIT_SHA>
@@ -82,25 +30,9 @@ properties:
           memoryInGB: 1
       volumeMounts:
   volumes:
-  - name: nginx-config
-    azureFile:
-      shareName: nginx-config
-      storageAccountName: <STORAGE_ACCOUNT_NAME>
-      storageAccountKey: <STORAGE_ACCOUNT_KEY>
-  # - secret:
-  #     ssl.crt: "$ssl_crt"
-  #     ssl.key: "$ssl_key"
-  #     nginx.conf: "$nginx_conf"
-  #   name: nginx-config
-  # - name: initscript
-  #   azureFile:
-  #     readOnly: true
-  #     shareName: initscript
-  #     storageAccountName: <STORAGE_ACCOUNT_NAME>
-  #     storageAccountKey: <STORAGE_ACCOUNT_KEY>
   ipAddress:
     ports:
-    - port: 443
+    - port: 80
       protocol: TCP
     type: Private
   osType: Linux
