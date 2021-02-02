@@ -1,0 +1,10 @@
+{
+  "DefaultImageUrl" : "http://cdn.shahed.ca/default.jpg",
+  "DefaultHeight" : 150,
+  "DefaultWidth" : 200,
+  "DefaultOutputImageFormat" : "png",
+  "DefaultImageFitPolicy" : "contain",
+  "ImageBackground" : { "r": 248, "g": 249, "b": 250, "alpha": 1 },
+  "CacheDuration" : 5,
+  "_comment" : "CacheDuration is specified in hours | DefaultImageFitPolicy can be 'contain' or 'cover'"
+}

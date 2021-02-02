@@ -8,8 +8,6 @@ set -e
 # Set the following
 spName=aciazfriday
 subName="ca-jessde-demo-test"
-sqlServeUser=aciazfriday
-sqlServePassword=$RANDOM
 
 # set the subscription
 az account set --subscription "$subName" && echo "Your default subscription has been set to: $subName"
@@ -29,8 +27,6 @@ az account set --subscription "$subName" && echo "Your default subscription has 
         echo 'GitHub secrets for configuring GitHub workflow'
         echo '========================================================='
         echo "AZURE_CREDENTIALS: $spInfo"
-        echo "SQL_USER: $sqlServeUser"
-        echo "SQL_PASSWORD: $sqlServePassword"
         echo '========================================================='
     else
         "An error occurred. Please try again."
