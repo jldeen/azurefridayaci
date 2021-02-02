@@ -1,0 +1,94 @@
+name: PRFlow Azure Friday
+
+on:
+  pull_request:
+    branches:
+      - main
+
+env:
+  # basic  
+  resourceGroup: azurefriday
+  location: eastus
+  subName: "ca-jessde-demo-test"
+
+  # app specific
+  acrName: azurefriday21
+
+  # storage
+  storage_account_name: acijdimgresfq3snhzfq
+
+  # aci
+  pr_image_name: jd-image-pr
+
+jobs:
+  build:
+    name: Build / Push to ACR
+    runs-on: ubuntu-latest
+    steps:
+    # checkout branch
+    - name: git checkout main branch
+      uses: actions/checkout@v2
+
+    # log into Azure
+    - name: "Login via Azure CLI"
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+    
+    - name: "docker login"
+      uses: azure/docker-login@v1
+      with:
+        login-server: ${{ secrets.CONTAINER_REGISTRY }}
+        username: ${{ secrets.REGISTRY_USERNAME }}
+        password: ${{ secrets.REGISTRY_PASSWORD }}
+    
+    - name: "build image resizer api"
+      run: docker build ./imageresizer -t ${{ secrets.CONTAINER_REGISTRY }}/azurefriday-pr/imageresizer:${{ github.sha }}
+    
+    - name: Scan Image Resizer API Container
+      uses: jldeen/container-scan@releases/v1
+      with:
+        image-name: ${{ secrets.CONTAINER_REGISTRY }}/azurefriday-pr/imageresizer:${{ github.sha }}
+    
+    - name: "push image resizer api"
+      run: docker push ${{ secrets.CONTAINER_REGISTRY }}/azurefriday-pr/imageresizer:${{ github.sha }}
+
+  deploy:
+    name: Deploy to ACI
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      # checkout branch
+      - name: git checkout main branch
+        uses: actions/checkout@v2
+
+      # log into Azure
+      - name: "Login via Azure CLI"
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      
+      - name: 'Create Image Resizer in ACI'
+        uses: 'azure/aci-deploy@v1'
+        with:
+          resource-group: ${{ env.resourceGroup }}
+          name: ${{ env.pr_image_name }}-${{github.event.number}}
+          dns-name-label: ${{ env.pr_image_name }}-${{github.event.number}}
+          image: ${{ secrets.CONTAINER_REGISTRY }}/azurefriday-pr/imageresizer:${{ github.sha }}
+          registry-login-server: ${{ secrets.CONTAINER_REGISTRY }} 
+          registry-username: ${{ secrets.REGISTRY_USERNAME }}
+          registry-password: ${{ secrets.REGISTRY_PASSWORD }}
+          location: ${{ env.location }}
+          ports: 80
+          azure-file-volume-share-name: pr-images
+          azure-file-volume-account-name: ${{ env.storage_account_name }}
+          azure-file-volume-account-key: ${{ secrets.storage_account_key }}
+          azure-file-volume-mount-path: /app/images
+      
+      - name: "Wrapping up"
+        run: echo "fqdn=$(az container show -g $resourceGroup -n $pr_image_name-${{github.event.number}} --query 'ipAddress.fqdn' -o tsv)" >> $GITHUB_ENV
+      
+      - uses: jldeen/add-review-url@releases/v0              
+        with:
+            repo-token: ${{ secrets.GITHUB_TOKEN }}  
+            fqdn: ${{ env.fqdn }}

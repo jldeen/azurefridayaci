@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <!-- Required meta tags -->
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+
+    <!-- Bootstrap CSS -->
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.1.3/css/bootstrap.min.css" integrity="sha384-MCw98/SFnGE8fJT3GXwEOngsV7Zt27NXFoaoApmYm81iuXoPkFOJwJ8ERdknLPMO" crossorigin="anonymous">
+    <link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.7.1/css/all.css" integrity="sha384-fnmOCqbTlWIlj8LyTjo7mOUStjsKC4pOpQbqyi7RrhN7udi9RwhKkMHpvLbHG9Sr" crossorigin="anonymous">
+
+    <title>Image Resizer</title>
+
+    <style>
+
+        .modal-lg {
+            max-width: 90% !important;
+        }
+        .modal-dialog{
+            max-width: 90% !important;
+        }
+    </style>
+
+</head>
+<body>
+<div class="container">
+    <div class="py-5 text-center">
+        <img class="d-block mx-auto mb-2" src="http://cdn.shahed.ca/default.jpg" alt="" width="72" height="72">
+        <h2>Scott's Image Resizer</h2>
+        <img src="http://jd-image.eastus.azurecontainer.io/resize?url=https%3A//cdn.livekindly.co/wp-content/uploads/2019/03/livekindly_chipotle.jpg&h=400&w=600&f=PNG">
+    </div>
+</div>
+<div class="container">
+
+    <div class="card alert">
+        <div class="card-body">
+            <h5 class="card-title">Resize an image from url</h5>
+            <p class="card-text">
+                Specify the image url, desired height, width and output format in the parameters and the response will contain the output image. Supported output formats are: PNG, JPEG, TIFF, WebP.
+                </p>
+            <p>
+                Sample http request format:
+                <code id="codeSnippet">
+
+                </code>
+            </p>
+        </div>
+
+    </div>
+    <div class="bg-light card">
+        <div class="card-body">
+        <h5 class="card-title">Test Pad</h5>
+
+        <p class="card-text">
+            <div class="form-group">
+                <label for="txtUrl">URL</label>
+                <input type="url" id="txtUrl" class="form-control" value="http://cdn.shahed.ca/default.jpg" placeholder="http://cdn.shahed.ca/test.jpg"/>
+            </div>
+            <div class="row">
+
+            <div class="form-group col">
+                <label for="txtHeight">Height</label>
+                <input type="number" id="txtHeight"  class="form-control" value="400" style="width:160px"/>
+            </div>
+
+            <div class="form-group col">
+                <label for="txtWidth">Width</label>
+                <input type="number" id="txtWidth" class="form-control"  value="600" style="width:160px"/>
+            </div>
+            <div class="form-group col">
+                <label for="drpFormat">Output Image Format</label>
+                <select class="form-control" id="drpFormat" class="form-control"  style="width:160px">
+                    <option selected>PNG</option>
+                    <option>JPEG</option>
+                    <option>TIFF</option>
+                    <option>WebP</option>
+                </select>
+            </div>
+
+            </div>
+            <button class="btn btn-primary" onclick="resizeImage()" data-toggle="modal" data-target="#resultModal">Resize</button>
+        </p>
+        </div>
+    </div>
+</div>
+
+
+<div class="modal fade modal-lg" id="resultModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Resized Image</h5>
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <i class="fa fa-download"></i> &nbsp;<a id="lnkDownload" target="_blank">Download</a>
+                <p>
+                    <img  id="imgResized" />
+                </p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+<div class="container">
+    <div class="py-5 text-center">
+        <p>Original Work Credit: <a href="https://github.com/shahedk">Shahedul Huq Khandkar</a></p>
+    </div>
+</div>
+
+<script src="https://code.jquery.com/jquery-3.3.1.slim.min.js" integrity="sha384-q8i/X+965DzO0rT7abK41JStQIAqVgRVzpbzo5smXKp4YfRvH+8abtTE1Pi6jizo" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.14.3/umd/popper.min.js" integrity="sha384-ZMP7rVo3mIykV+2+9J3UJ46jBk0WLaUAdn689aCwoqbBJiSnjAK/l8WvCWPIPm49" crossorigin="anonymous"></script>
+<script src="https://stackpath.bootstrapcdn.com/bootstrap/4.1.3/js/bootstrap.min.js" integrity="sha384-ChfqqxuZUCnJSK3+MXmPNIyE6ZbWh2IMqE241rYiqJxyMiZ6OW/JmZQ5stwEULTy" crossorigin="anonymous"></script>
+<script>
+    function resizeImage(){
+        var url = escape($('#txtUrl').val());
+        var h = $('#txtHeight').val();
+        var w = $('#txtWidth').val();
+        var f = $('#drpFormat').val();
+
+        var reqUrl = document.location.href + 'resize?url='+url+'&h='+h+'&w='+w+'&f='+f;
+
+        $('#imgResized').attr('src',reqUrl);
+        $('#lnkDownload').attr('href', reqUrl);
+        $('#lnkDownload').html( reqUrl);
+
+        $('#resultModal').modal('show');
+    }
+
+    $(document).ready(function(){
+       $('#codeSnippet').html(document.location.href + 'resize?url={image url}&h={height}&w={width}&f={format}');
+    });
+</script>
+</body>
+</html>

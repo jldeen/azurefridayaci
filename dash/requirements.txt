@@ -1,8 +1,0 @@
-dash
-dash-bootstrap-components
-plotly
-dnspython
-requests
-pymysql
-pyodbc
-psycopg2
