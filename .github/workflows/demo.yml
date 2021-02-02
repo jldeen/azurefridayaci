@@ -18,6 +18,7 @@ env:
   # aci
   api_name: jdaci
   dash_name: jd-dash
+  aci_name: jd-text
 
 jobs:
   deployInfra:
@@ -105,6 +106,9 @@ jobs:
     - name: "build dash container"
       run: docker build ./dash -t $CONTAINER_REGISTRY/azurefriday/dash:$GITHUB_SHA
     
+    - name: "build text analytics api"
+      run: docker build ./textApi -t $CONTAINER_REGISTRY/azurefriday/textApi:$GITHUB_SHA
+    
     # - name: Scan API Container
     #   uses: azure/container-scan@v0
     #   with:
@@ -120,6 +124,9 @@ jobs:
 
     - name: "push dashboard"
       run: docker push $CONTAINER_REGISTRY/azurefriday/dash:$GITHUB_SHA
+    
+    - name: "push text api"
+      run: docker push $CONTAINER_REGISTRY/azurefriday/textApi:$GITHUB_SHA
 
   deployStaging:
     name: (Staging) Deploy Azure Container Instances
@@ -177,3 +184,17 @@ jobs:
           ports: 8080
           environment-variables: SQL_SERVER_FQDN=${{ env.sql_server_fqdn }} SQL_SERVER_DB=${{ env.sql_db_name }}
           secure-environment-variables: SQL_SERVER_USERNAME=${{ SECRETS.SQL_USER }} SQL_SERVER_PASSWORD=${{ SECRETS.SQL_PASSWORD }}
+      
+      - name: 'Deploy Api to Azure Container Instances'
+        uses: 'azure/aci-deploy@v1'
+        with:
+          resource-group: ${{ env.resourceGroup }}
+          name: ${{ env.aci_name }}
+          dns-name-label: ${{ env.aci_name }}
+          image: ${{ env.CONTAINER_REGISTRY }}/azurefriday/api:${{ github.sha }}
+          registry-login-server: ${{ env.CONTAINER_REGISTRY }} 
+          registry-username: ${{ env.REGISTRY_USERNAME }}
+          registry-password: ${{ env.REGISTRY_PASSWORD }}
+          location: ${{ env.location }}
+          ports: 5000
+          

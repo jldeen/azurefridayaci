@@ -1,0 +1,1 @@
+FROM mcr.microsoft.com/azure-cognitive-services/textanalytics/sentiment:2.1
