@@ -169,7 +169,7 @@ jobs:
         with:
           resource-group: ${{ env.resourceGroup }}
           name: ${{ env.dash_name }}
-          dns-name-label: ${{ aci_api_name_prefix }}
+          dns-name-label: ${{ env.aci_api_name_prefix }}
           image: ${{ env.CONTAINER_REGISTRY }}/azurefriday/api:${{ github.sha }}
           registry-username: ${{ env.REGISTRY_USERNAME }}
           registry-password: ${{ env.REGISTRY_PASSWORD }}

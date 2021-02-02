@@ -1,6 +1,6 @@
 name: Azure Friday Full CI CD
 
-on: [push]
+on: [workflow_dispatch]
   # pull_request:
   #   branches:
   #     - main
@@ -25,9 +25,6 @@ env:
   sql_subnet_name: sql
   sql_subnet_prefix: 192.168.3.0/24
 
-  # storage
-  storage_account_name: acilabgfq3snhzfq
-
   # appgw
   appgw_name: appgw
   appgw_subnet_name: appgw
@@ -37,6 +34,7 @@ env:
 
   # aci
   aci_name: jdaci
+  aci_name_prefix: jdapi
   aci_subnet_name: aci
   aci_subnet_prefix: 192.168.2.0/24
 
@@ -397,7 +395,7 @@ jobs:
             -n acidevpool \
             -g $resourceGroup \
             --gateway-name $appgw_name \
-            --servers ${aci_name_prefix}-dev-01.contoso.com ${aci_name_prefix}-dev-02.contoso.com ${aci_name_prefix}-dev-03.contoso.com
+            --servers $aci_name_prefix-dev-01.jessicadeen.com $aci_name_prefix-dev-02.jessicadeen.com $aci_name_prefix-dev-03.jessicadeen.com
           
           az network application-gateway frontend-port create \
             -n acidevfrontendport \
@@ -476,6 +474,39 @@ jobs:
 
           sed -i "s|<GIT_SHA>|$GITHUB_SHA|g" IaC/dev.yaml && echo "github sha added"
       
+      - name: "ACI API and Web Group Deploy"
+        run: az container create -g $resourceGroup --file IaC/dev.yaml --no-wait
+
+      - name: "Update Application Gateay"
+        run: |
+          
+          az network application-gateway address-pool create \
+            -n acidevpool \
+            -g $resourceGroup \
+            --gateway-name $appgw_name \
+            --servers $aci_name_prefix-prod-01.jessicadeen.com $aci_name_prefix-prod-02.jessicadeen.com $aci_name_prefix-prod-03.jessicadeen.com
+          
+          az network application-gateway frontend-port create \
+            -n acidevfrontendport \
+            -g $resourceGroup \
+            --gateway-name $appgw_name \
+            --port 8443
+          
+          az network application-gateway http-listener create \
+            -n acidevlistener \
+            -g $resourceGroup \
+            --gateway-name $appgw_name \
+            --frontend-port acidevfrontendport \
+            --frontend-ip $frontend_name \
+          
+          az network application-gateway rule create \
+            -g $resourceGroup \
+            --gateway-name $appgw_name \
+            -n acidevrule \
+            --http-listener acidevlistener \
+            --rule-type Basic \
+            --address-pool acidevpool \
+            --http-settings acisettings
       # - name: "Update Application Gateway"
       #   run: |
       #     allocation_method=Static
