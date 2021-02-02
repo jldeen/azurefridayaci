@@ -1,0 +1,179 @@
+name: Azure Friday Demo
+
+on: [push, workflow_dispatch]
+
+env:
+  # basic  
+  resourceGroup: azurefriday
+  location: eastus
+  subName: "ca-jessde-demo-test"
+
+  # app specific
+  acrName: azurefriday21
+  dash_name: dash
+
+  #sql
+  sql_server_name: sqlserver-gfq3snhzfq
+  sql_db_name: mydb
+
+  # aci
+  aci_name: jdaci
+  aci_dash_name_prefix: jd-dash
+  aci_aci_name_prefix: jdapi
+
+jobs:
+  deployInfra:
+    name: Setup Environment
+    runs-on: ubuntu-latest
+    steps:
+    # checkout branch
+    - name: git checkout main branch
+      uses: actions/checkout@v2
+
+    # log into Azure
+    - name: "Login via Azure CLI"
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+    # create resourceGroup
+    - name: "Create Resource Group and Network vnet"
+      run: |
+        az group create \
+        --subscription "$subName" \
+        --name $resourceGroup \
+        --location $location > /dev/null && echo "Resource Group Created."
+
+    # create azure container registry
+    - name: "Create Azure Container Registry"
+      run: |
+        az acr create \
+          --resource-group $resourceGroup \
+          --name $acrName \
+          --sku Premium \
+          --subscription "$subName" \
+          --admin-enabled true
+    
+    # create database
+    - name: "Create SQL Database"
+      run: |
+        az sql server create \
+          -n $sql_server_name \
+          -g $resourceGroup \
+          -l $location \
+          --admin-user ${{ SECRETS.SQL_USER }} --admin-password ${{ SECRETS.SQL_PASSWORD}}
+        
+        az sql db create \
+          -n $sql_db_name \
+          -s $sql_server_name \
+          -g $resourceGroup \
+          -e Basic -c 5 --no-wait
+        
+  build:
+    name: Build / Push to ACR
+    runs-on: ubuntu-latest
+    needs: deployInfra
+    steps:
+    # checkout branch
+    - name: git checkout main branch
+      uses: actions/checkout@v2
+
+    # log into Azure
+    - name: "Login via Azure CLI"
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+    - name: "Get ACR Container Information"
+      run: |
+        echo "Retrieving Container Registry info..."
+        acrName=$(az acr list -g $resourceGroup -o tsv --query [0].name)
+        CONTAINER_REGISTRY=$(az acr list -g $resourceGroup -o tsv --query [0].loginServer)
+        # acr/container registry variables
+        echo "CONTAINER_REGISTRY=$(az acr list -g $resourceGroup -o tsv --query [0].loginServer)" >> $GITHUB_ENV
+        echo "REGISTRY_USERNAME=$(az acr credential show -n $acrName --query username -o tsv)" >> $GITHUB_ENV
+        echo "REGISTRY_PASSWORD=$(az acr credential show -n $acrName -o tsv --query passwords[0].value)" >> $GITHUB_ENV
+    
+    - name: "docker login"
+      uses: azure/docker-login@v1
+      with:
+        login-server: ${{ env.CONTAINER_REGISTRY }}
+        username: ${{ env.REGISTRY_USERNAME }}
+        password: ${{ env.REGISTRY_PASSWORD }}
+
+    - name: "build api container"
+      run: docker build ./api -t $CONTAINER_REGISTRY/azurefriday/api:$GITHUB_SHA
+
+    - name: "build dash container"
+      run: docker build ./dash -t $CONTAINER_REGISTRY/azurefriday/dash:$GITHUB_SHA
+    
+    # - name: Scan API Container
+    #   uses: azure/container-scan@v0
+    #   with:
+    #     image-name: $CONTAINER_REGISTRY/azurefriday/api:$GITHUB_SHA
+    
+    # - name: Scan Dashboard Container
+    #   uses: azure/container-scan@v0
+    #   with:
+    #     image-name: $CONTAINER_REGISTRY/azurefriday/dash:$GITHUB_SHA
+
+    - name: "push api"
+      run: docker push $CONTAINER_REGISTRY/azurefriday/api:$GITHUB_SHA
+
+    - name: "push dashboard"
+      run: docker push $CONTAINER_REGISTRY/azurefriday/dash:$GITHUB_SHA
+
+  deployStaging:
+    name: (Staging) Deploy Azure Container Instances
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      # checkout branch
+      - name: git checkout main branch
+        uses: actions/checkout@v2
+
+      # log into Azure
+      - name: "Login via Azure CLI"
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: "Get ACR Container Information"
+        run: |
+          echo "Retrieving Container Registry info..."
+          acrName=$(az acr list -g $resourceGroup -o tsv --query [0].name)
+          CONTAINER_REGISTRY=$(az acr list -g $resourceGroup -o tsv --query [0].loginServer)
+          # acr/container registry variables
+          echo "CONTAINER_REGISTRY=$(az acr list -g $resourceGroup -o tsv --query [0].loginServer)" >> $GITHUB_ENV
+          echo "REGISTRY_USERNAME=$(az acr credential show -n $acrName --query username -o tsv)" >> $GITHUB_ENV
+          echo "REGISTRY_PASSWORD=$(az acr credential show -n $acrName -o tsv --query passwords[0].value)" >> $GITHUB_ENV
+
+          echo "sql_server_fqdn=$(az sql server show -n $sql_server_name -g $resourceGroup -o tsv --query fullyQualifiedDomainName)" >> $GITHUB_ENV
+
+      - name: 'Deploy Dashboard to Azure Container Instances'
+        uses: 'azure/aci-deploy@v1'
+        with:
+          resource-group: ${{ env.resourceGroup }}
+          name: ${{ env.dash_name }}
+          dns-name-label: ${{ aci_dash_name_prefix }}
+          image: ${{ env.CONTAINER_REGISTRY }}/azurefriday/dash:${{ github.sha }}
+          registry-username: ${{ env.REGISTRY_USERNAME }}
+          registry-password: ${{ env.REGISTRY_PASSWORD }}
+          location: ${{ env.location }}
+          ports: 8050
+          environment-variables: SQL_SERVER_FQDN=$sql_server_fqdn SQL_SERVER_DB=$sql_db_name
+          secure-environment-variables: SQL_SERVER_USERNAME=${{ SECRETS.SQL_USER }} ${{ SECRETS.SQL_PASSWORD }}
+
+      - name: 'Deploy Api to Azure Container Instances'
+        uses: 'azure/aci-deploy@v1'
+        with:
+          resource-group: ${{ env.resourceGroup }}
+          name: ${{ env.dash_name }}
+          dns-name-label: ${{ aci_api_name_prefix }}
+          image: ${{ env.CONTAINER_REGISTRY }}/azurefriday/api:${{ github.sha }}
+          registry-username: ${{ env.REGISTRY_USERNAME }}
+          registry-password: ${{ env.REGISTRY_PASSWORD }}
+          location: ${{ env.location }}
+          ports: 8080
+          environment-variables: SQL_SERVER_FQDN=$sql_server_fqdn SQL_SERVER_DB=$sql_db_name
+          secure-environment-variables: SQL_SERVER_USERNAME=${{ SECRETS.SQL_USER }} ${{ SECRETS.SQL_PASSWORD }}
