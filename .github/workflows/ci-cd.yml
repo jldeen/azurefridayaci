@@ -201,7 +201,8 @@ jobs:
     - name: "Create Network Profile"
       run: |
         vnet_id=$(az network vnet show -n $vnet_name -g $resourceGroup --query id -o tsv)
-        
+        subnet_id=$(az network vnet subnet show -n $aci_subnet_name --vnet-name $vnet_name -g $resourceGroup --query id -o tsv)
+
         az container create \
           -n dummy \
           -g $resourceGroup \
