@@ -1,33 +1,28 @@
-name: Azure Friday CI CD
+name: Azure Friday Demo
 
-on: [push]
-  # pull_request:
-  #   branches:
-  #     - main
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    
+
+# add in on main branch only
 
 env:
   # basic  
-  resourceGroup: itsfriday21
+  resourceGroup: azurefriday
   location: eastus
   subName: "ca-jessde-demo-test"
 
   # app specific
-  aci_name: sslaci
-  acr_name: itsfriday21
+  acrName: azurefriday21
 
-  # db var
-  sql_server_name: sqlserver$RANDOM
-  sql_db_name: acisqldb
+  # storage
+  storage_account_name: acijdimgresfq3snhzfq
 
-  #network variables
-  vnet_name: acivnet
-  vnet_prefix: 192.168.0.0/16
-  vm_subnet_name: vm
-  vm_subnet_prefix: 192.168.1.0/24
-  aci_subnet_name: aci
-  aci_subnet_prefix: 192.168.2.0/24
-  sql_subnet_name: sql
-  sql_subnet_prefix: 192.168.3.0/24
+  # aci
+  image_name: jd-image
 
 jobs:
   deployInfra:
@@ -45,75 +40,99 @@ jobs:
         creds: ${{ secrets.AZURE_CREDENTIALS }}
 
     # create resourceGroup
-    # create resource group and VM
-    - name: "Create Resource Group and VM"
+    - name: "Create Resource Group"
       run: |
-        az group create --subscription "$subName" --name $resourceGroup --location $location > /dev/null && echo "Resource Group Created."
+        az group create \
+        --subscription "$subName" \
+        --name $resourceGroup \
+        --location $location > /dev/null && echo "Resource Group Created."
 
-        az vm create -n test-vm -g $resourceGroup -l $location --image ubuntuLTS --generate-ssh-keys \
-        --public-ip-address test-vm-pip --vnet-name $vnet_name \
-        --vnet-address-prefix $vnet_prefix --subnet $vm_subnet_name --subnet-address-prefix $vm_subnet_prefix
-        
-
-        vm_pip=$(az network public-ip show -n test-vm-pip -g $resourceGroup --query ipAddress -o tsv) && echo "VM Public IP has been created. Your PIP is: $vm_pip"
-
-        # persist to future steps
-        echo "::set-env name=vm_pip::$$(az network public-ip show -n test-vm-pip -g $resourceGroup --query ipAddress -o tsv)"
-
-    # Create Database
-    - name: "Create Database and set firewall rules"
-      run: |
-        az sql server create -n $sql_server_name -g $resourceGroup -l $location --admin-user ${{ SECRETS.SQL_USER }} --admin-password ${{ SECRETS.SQL_PASSWORD }}
-
-        sql_server_fqdn=$(az sql server show -n $sql_server_name -g $resourceGroup -o tsv --query fullyQualifiedDomainName)
-        echo "::set-env name=sql_server_fqdn::$$(az sql server show -n $sql_server_name -g $resourceGroup -o tsv --query fullyQualifiedDomainName)"
-
-        az sql db create \
-          -n $sql_db_name \
-          -s $sql_server_name \
-          -g $resourceGroup -e Basic \
-          -c 5 --no-wait
-
-        aci_pip=$(ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $vm_pip "curl -s http://$aci_ip:8080/api/ip" | jq -r .my_public_ip) && echo $aci_pip
-
-        az sql server firewall-rule create \
-        -g $resourceGroup \
-        -s $sql_server_name \
-        -n public_sqlapi_aci-source \
-        --start-ip-address $aci_pip \
-        --end-ip-address $aci_pip
-
-        ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $vm_pip "curl -s http://$aci_ip:8080/api/sqlversion"
-
-        ssh -n -o BatchMode=yes -o StrictHostKeyChecking=no $vm_pip "curl -s http://$aci_ip:8080/api/sqlsrcip"
-    
     # create azure container registry
-    - name: "Create Azure Container Registry"
+    - name: "Create Azure Container Registries"
+      id: create-acr
       run: |
         az acr create \
           --resource-group $resourceGroup \
           --name $acrName \
-          --sku Basic \
+          --sku Premium \
           --subscription "$subName" \
           --admin-enabled true
 
-    # Create ACI
-    - name: "Create Azure Container Instance for SQL API"
+        echo "Retrieving Container Registry info..."
+        CONTAINER_REGISTRY=$(az acr list -g $resourceGroup -o tsv --query [0].loginServer)
+        REGISTRY_USERNAME=$(az acr credential show -n $acrName --query username -o tsv)
+        REGISTRY_PASSWORD=$(az acr credential show -n $acrName -o tsv --query passwords[0].value)
+
+        echo "CONTAINER_REGISTRY=$(az acr list -g $resourceGroup -o tsv --query [0].loginServer)" >> $GITHUB_ENV
+        echo "REGISTRY_USERNAME=$(az acr credential show -n $acrName --query username -o tsv)" >> $GITHUB_ENV
+        echo "REGISTRY_PASSWORD=$(az acr credential show -n $acrName -o tsv --query passwords[0].value)" >> $GITHUB_ENV
+
+        echo "::add-mask::$REGISTRY_USERNAME"
+        echo "::add-mask::$REGISTRY_PASSWORD"
+    
+    # Create storage account
+    - name: "Create storage account"
       run: |
-        az network vnet subnet create -g $resourceGroup --vnet-name $vnet_name -n $aci_subnet_name --address-prefix $aci_subnet_prefix
+        az storage account create \
+          -n $storage_account_name \
+          -g $resourceGroup \
+          --sku Premium_LRS \
+          --kind FileStorage
+        
+        storage_account_key=$(az storage account keys list --account-name $storage_account_name -g $resourceGroup --query '[0].value' -o tsv)
+        echo "storage_account_key=$(az storage account keys list --account-name $storage_account_name -g $resourceGroup --query '[0].value' -o tsv)" >> $GITHUB_ENV
+        echo "::add-mask::$storage_account_key"
 
-        vnet_id=$(az network vnet show -n $vnet_name -g $resourceGroup --query id -o tsv)
+        az storage share create \
+          --account-name $storage_account_name \
+          --account-key $storage_account_key \
+          --name images
 
-        aci_subnet_id=$(az network vnet subnet show -n $aci_subnet_name --vnet-name $vnet_name -g $resourceGroup --query id -o tsv)
+        # make sub folder for originals
 
-        // may move
-        az container create -n $aci_name -g $resourceGroup -e "SQL_SERVER_USERNAME=${{ SECRETS.SQL_USER }}" \
-        "SQL_SERVER_PASSWORD=${{ SECRETS.SQL_PASSWORD }}" \
-        "SQL_SERVER_FQDN=${sql_server_fqdn}" \
-        --image erjosito/sqlapi:1.0 \
-        --ip-address private --ports 8080 --vnet $vnet_id --subnet $aci_subnet_id
+        az storage share create \
+          --account-name $storage_account_name \
+          --account-key $storage_account_key \
+          --name pr-images
+
+    - name: "Create Storage Key Secret"
+      uses: jldeen/actions-set-secret@releases/v1
+      with:
+        name: storage_account_key
+        value: ${{ env.storage_account_key }}
+        owner: jldeen
+        repository: azurefridayaci
+        token: ${{ secrets.REPO_TOKEN }}
+
+    - name: "Create Registry Secret"
+      uses: jldeen/actions-set-secret@releases/v1
+      with:
+        name: CONTAINER_REGISTRY
+        value: ${{ env.CONTAINER_REGISTRY }}
+        owner: jldeen
+        repository: azurefridayaci
+        token: ${{ secrets.REPO_TOKEN }}   
+
+    - name: "Create Registry User Secret"
+      uses: jldeen/actions-set-secret@releases/v1
+      with:
+        name: REGISTRY_USERNAME
+        value: ${{ env.REGISTRY_USERNAME }}
+        owner: jldeen
+        repository: azurefridayaci
+        token: ${{ secrets.REPO_TOKEN }}
+
+    - name: "Create Registry Password Secret"
+      uses: jldeen/actions-set-secret@releases/v1
+      with:
+        name: REGISTRY_PASSWORD
+        value: ${{ env.REGISTRY_PASSWORD }}
+        owner: jldeen
+        repository: azurefridayaci
+        token: ${{ secrets.REPO_TOKEN }}         
 
   build:
+    name: Build / Push to ACR
     runs-on: ubuntu-latest
     needs: deployInfra
     steps:
@@ -126,63 +145,53 @@ jobs:
       uses: azure/login@v1
       with:
         creds: ${{ secrets.AZURE_CREDENTIALS }}
-
-    - name: "Get ACR Container Information"
-      run: |
-        echo "Retrieving Container Registry info..."
-        acrName=$(az acr list -g $resourceGroup -o tsv --query [0].name)
-        CONTAINER_REGISTRY=$(az acr list -g $resourceGroup -o tsv --query [0].loginServer)
-        # acr/container registry variables
-        echo "::set-env name=CONTAINER_REGISTRY::$(az acr list -g $resourceGroup -o tsv --query [0].loginServer)"
-        echo "::set-env name=REGISTRY_USERNAME::$(az acr credential show -n $acrName --query username -o tsv)"
-        echo "::set-env name=REGISTRY_PASSWORD::$(az acr credential show -n $acrName -o tsv --query passwords[0].value)"
     
     - name: "docker login"
       uses: azure/docker-login@v1
       with:
-        login-server: ${{ env.CONTAINER_REGISTRY }}
-        username: ${{ env.REGISTRY_USERNAME }}
-        password: ${{ env.REGISTRY_PASSWORD }}
-
-    - name: "build"
-      run: docker build -t $CONTAINER_REGISTRY/sqlapi:$GITHUB_SHA .
-
-    - uses: azure/container-scan@v0
-      with:
-        image-name: $CONTAINER_REGISTRY/sqlapi:$GITHUB_SHA
+        login-server: ${{ secrets.CONTAINER_REGISTRY }}
+        username: ${{ secrets.REGISTRY_USERNAME }}
+        password: ${{ secrets.REGISTRY_PASSWORD }}
     
-    - name: "push"
-      run: docker push $CONTAINER_REGISTRY/sqlapi:$GITHUB_SHA
+    - name: "build image resizer api"
+      run: docker build ./imageresizer -t ${{ secrets.CONTAINER_REGISTRY }}/azurefriday/imageresizer:${{ github.sha }}
+    
+    - name: Scan Image Resizer API Container
+      uses: jldeen/container-scan@releases/v1
+      with:
+        image-name: ${{ secrets.CONTAINER_REGISTRY }}/azurefriday/imageresizer:${{ github.sha }}
+    
+    - name: "push image resizer api"
+      run: docker push ${{ secrets.CONTAINER_REGISTRY }}/azurefriday/imageresizer:${{ github.sha }}
 
-  # Possibly setup release in ADO with gates and approvals
   deploy:
+    name: Deploy to ACI
     runs-on: ubuntu-latest
     needs: build
     steps:
-      - name: "Get ACR and App Insights Information"
-        run: |
-          echo "Retrieving Container Registry info..."
-          acrName=$(az acr list -g $resourceGroup -o tsv --query [0].name)
-          CONTAINER_REGISTRY=$(az acr list -g $resourceGroup -o tsv --query [0].loginServer)
-          # acr/container registry variables
-          echo "::set-env name=CONTAINER_REGISTRY::$(az acr list -g $resourceGroup -o tsv --query [0].loginServer)"
-          echo "::set-env name=REGISTRY_USERNAME::$(az acr credential show -n $acrName --query username -o tsv)"
-          echo "::set-env name=REGISTRY_PASSWORD::$(az acr credential show -n $acrName -o tsv --query passwords[0].value)"
+      # checkout branch
+      - name: git checkout main branch
+        uses: actions/checkout@v2
 
-          echo "Retrieving Application Insights info..."
-          instrumentationKey=$(az monitor app-insights component show --app $webappName --resource-group $resourceGroup --query instrumentationKey -o tsv)
-
-      - name: "Deploy to Azure Container Instances"
-        uses: "azure/aci-deploy@v1"
+      # log into Azure
+      - name: "Login via Azure CLI"
+        uses: azure/login@v1
         with:
-          resource-group: $resourceGroup
-          dns-name-label: $aci_dns
-          image: $CONTAINER_REGISTRY/sqlapi
-          registry-username: ${{ env.REGISTRY_USERNAME }}
-          registry-password: ${{ env.REGISTRY_PASSWORD }}
-          name: $aci_name
-          location: $location
-
-      # - name: "Deploy SQL ACI"
-      #   run: |
-      #     az container create -g $resourceGroup -f iac/dev.yaml
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      
+      - name: 'Create Image Resizer in ACI'
+        uses: 'azure/aci-deploy@v1'
+        with:
+          resource-group: ${{ env.resourceGroup }}
+          name: ${{ env.image_name }}
+          dns-name-label: ${{ env.image_name }}
+          image: ${{ secrets.CONTAINER_REGISTRY }}/azurefriday/imageresizer:${{ github.sha }}
+          registry-login-server: ${{ secrets.CONTAINER_REGISTRY }}
+          registry-username: ${{ secrets.REGISTRY_USERNAME }}
+          registry-password: ${{ secrets.REGISTRY_PASSWORD }}
+          location: ${{ env.location }}
+          ports: 80
+          azure-file-volume-share-name: images
+          azure-file-volume-account-name: ${{ env.storage_account_name }}
+          azure-file-volume-account-key: ${{ secrets.storage_account_key }}
+          azure-file-volume-mount-path: /app/images

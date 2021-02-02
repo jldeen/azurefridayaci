@@ -1,0 +1,32 @@
+name: Pull Request Closed
+
+on:
+  pull_request:
+    types: [closed]
+    
+env:
+  # basic  
+  resourceGroup: azurefriday
+
+  # aci
+  pr_image_name: jd-image-pr
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # checkout branch
+      - name: git checkout main branch
+        uses: actions/checkout@v2
+
+      # log into Azure
+      - name: "Login via Azure CLI"
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Delete PR Azure Container Instance
+        run: |
+          az container delete \
+            -g $resourceGroup \
+            -n $pr_image_name-${{github.event.number}} -y
