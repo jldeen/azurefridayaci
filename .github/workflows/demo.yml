@@ -19,7 +19,7 @@ env:
   # aci
   aci_name: jdaci
   aci_dash_name_prefix: jd-dash
-  aci_aci_name_prefix: jdapi
+  aci_api_name_prefix: jdapi
 
 jobs:
   deployInfra:
