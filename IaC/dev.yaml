@@ -32,7 +32,7 @@ properties:
   volumes:
   ipAddress:
     ports:
-    - port: 80
+    - port: 8080
       protocol: TCP
     type: Private
   osType: Linux
