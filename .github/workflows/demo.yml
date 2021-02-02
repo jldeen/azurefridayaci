@@ -162,7 +162,7 @@ jobs:
           registry-password: ${{ env.REGISTRY_PASSWORD }}
           location: ${{ env.location }}
           ports: 8050
-          environment-variables: SQL_SERVER_FQDN=$sql_server_fqdn SQL_SERVER_DB=$sql_db_name
+          environment-variables: SQL_SERVER_FQDN=${{ env.sql_server_fqdn }} SQL_SERVER_DB=${{ env.sql_db_name }}
           secure-environment-variables: SQL_SERVER_USERNAME=${{ SECRETS.SQL_USER }} ${{ SECRETS.SQL_PASSWORD }}
 
       - name: 'Deploy Api to Azure Container Instances'
@@ -177,5 +177,5 @@ jobs:
           registry-password: ${{ env.REGISTRY_PASSWORD }}
           location: ${{ env.location }}
           ports: 8080
-          environment-variables: SQL_SERVER_FQDN=$sql_server_fqdn SQL_SERVER_DB=$sql_db_name
+          environment-variables: SQL_SERVER_FQDN=${{ env.sql_server_fqdn }} SQL_SERVER_DB=${{ env.sql_db_name }}
           secure-environment-variables: SQL_SERVER_USERNAME=${{ SECRETS.SQL_USER }} ${{ SECRETS.SQL_PASSWORD }}
