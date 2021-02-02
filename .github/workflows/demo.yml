@@ -157,6 +157,7 @@ jobs:
           name: ${{ env.dash_name }}
           dns-name-label: ${{ env.aci_dash_name_prefix }}
           image: ${{ env.CONTAINER_REGISTRY }}/azurefriday/dash:${{ github.sha }}
+          registry-login-server: ${{ env.CONTAINER_REGISTRY }} 
           registry-username: ${{ env.REGISTRY_USERNAME }}
           registry-password: ${{ env.REGISTRY_PASSWORD }}
           location: ${{ env.location }}
@@ -171,6 +172,7 @@ jobs:
           name: ${{ env.dash_name }}
           dns-name-label: ${{ env.aci_api_name_prefix }}
           image: ${{ env.CONTAINER_REGISTRY }}/azurefriday/api:${{ github.sha }}
+          registry-login-server: ${{ env.CONTAINER_REGISTRY }} 
           registry-username: ${{ env.REGISTRY_USERNAME }}
           registry-password: ${{ env.REGISTRY_PASSWORD }}
           location: ${{ env.location }}
