@@ -279,7 +279,7 @@ jobs:
       run: docker push $CONTAINER_REGISTRY/azurefriday/dash:$GITHUB_SHA
 
   deployStaging:
-    name: Deploy Azure Container Instances (Staging)
+    name: (Staging) Deploy Azure Container Instances
     runs-on: ubuntu-latest
     needs: build
     steps:
@@ -419,9 +419,9 @@ jobs:
             --http-settings acisettings
 
   deployProd:
-    name: Deploy Azure Container Instances (Production)
+    name: (Prod) Deploy Azure Container Instances
     runs-on: ubuntu-latest
-    needs: build
+    needs: deployStaging
     steps:
       # checkout branch
       - name: git checkout main branch
