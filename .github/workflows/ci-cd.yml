@@ -280,20 +280,20 @@ jobs:
     - name: "build dash container"
       run: docker build ./dash -t $CONTAINER_REGISTRY/azurefriday/dash:$GITHUB_SHA
 
-    - name: Scan Web Container
-      uses: azure/container-scan@v0
-      with:
-        image-name: $CONTAINER_REGISTRY/azurefriday/web:$GITHUB_SHA
+    # - name: Scan Web Container
+    #   uses: azure/container-scan@v0
+    #   with:
+    #     image-name: $CONTAINER_REGISTRY/azurefriday/web:$GITHUB_SHA
     
-    - name: Scan API Container
-      uses: azure/container-scan@v0
-      with:
-        image-name: $CONTAINER_REGISTRY/azurefriday/api:$GITHUB_SHA
+    # - name: Scan API Container
+    #   uses: azure/container-scan@v0
+    #   with:
+    #     image-name: $CONTAINER_REGISTRY/azurefriday/api:$GITHUB_SHA
     
-    - name: Scan Dashboard Container
-      uses: azure/container-scan@v0
-      with:
-        image-name: $CONTAINER_REGISTRY/azurefriday/dash:$GITHUB_SHA
+    # - name: Scan Dashboard Container
+    #   uses: azure/container-scan@v0
+    #   with:
+    #     image-name: $CONTAINER_REGISTRY/azurefriday/dash:$GITHUB_SHA
     
     - name: "push web"
       run: docker push $CONTAINER_REGISTRY/azurefriday/web:$GITHUB_SHA
