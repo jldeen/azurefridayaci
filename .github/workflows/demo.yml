@@ -10,16 +10,14 @@ env:
 
   # app specific
   acrName: azurefriday21
-  dash_name: dash
 
   #sql
   sql_server_name: sqlserver-gfq3snhzfq
   sql_db_name: mydb
 
   # aci
-  aci_name: jdaci
-  aci_dash_name_prefix: jd-dash
-  aci_api_name_prefix: jdapi
+  api_name: jdaci
+  dash_name: jd-dash
 
 jobs:
   deployInfra:
@@ -155,7 +153,7 @@ jobs:
         with:
           resource-group: ${{ env.resourceGroup }}
           name: ${{ env.dash_name }}
-          dns-name-label: ${{ env.aci_dash_name_prefix }}
+          dns-name-label: ${{ env.dash_name }}
           image: ${{ env.CONTAINER_REGISTRY }}/azurefriday/dash:${{ github.sha }}
           registry-login-server: ${{ env.CONTAINER_REGISTRY }} 
           registry-username: ${{ env.REGISTRY_USERNAME }}
@@ -169,8 +167,8 @@ jobs:
         uses: 'azure/aci-deploy@v1'
         with:
           resource-group: ${{ env.resourceGroup }}
-          name: ${{ env.dash_name }}
-          dns-name-label: ${{ env.aci_api_name_prefix }}
+          name: ${{ env.api_name }}
+          dns-name-label: ${{ env.api_name }}
           image: ${{ env.CONTAINER_REGISTRY }}/azurefriday/api:${{ github.sha }}
           registry-login-server: ${{ env.CONTAINER_REGISTRY }} 
           registry-username: ${{ env.REGISTRY_USERNAME }}
