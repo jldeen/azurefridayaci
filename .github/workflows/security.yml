@@ -1,0 +1,69 @@
+name: Azure Friday Demo
+
+on: [push, workflow_dispatch]
+
+env:
+  # basic  
+  resourceGroup: azurefriday
+  location: eastus
+  subName: "ca-jessde-demo-test"
+
+  # app specific
+  acrName: azurefriday21
+
+  #sql
+  sql_server_name: sqlserver-gfq3snhzfq
+  sql_db_name: mydb
+
+  # storage
+  storage_account_name: acijdimgresfq3snhzfq
+
+  # aci
+  api_name: jdaci
+  dash_name: jd-dash
+  image_name: jd-image
+  TRIVY_TIMEOUT_SEC: 360s 
+
+jobs:      
+  build:
+    name: Build / Push to ACR
+    runs-on: ubuntu-latest
+    needs: deployInfra
+    steps:
+    # checkout branch
+    - name: git checkout main branch
+      uses: actions/checkout@v2
+
+    # log into Azure
+    - name: "Login via Azure CLI"
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+    - name: "Get ACR Container Information"
+      run: |
+        echo "Retrieving Container Registry info..."
+        acrName=$(az acr list -g $resourceGroup -o tsv --query [0].name)
+        CONTAINER_REGISTRY=$(az acr list -g $resourceGroup -o tsv --query [0].loginServer)
+        # acr/container registry variables
+        echo "CONTAINER_REGISTRY=$(az acr list -g $resourceGroup -o tsv --query [0].loginServer)" >> $GITHUB_ENV
+        echo "REGISTRY_USERNAME=$(az acr credential show -n $acrName --query username -o tsv)" >> $GITHUB_ENV
+        echo "REGISTRY_PASSWORD=$(az acr credential show -n $acrName -o tsv --query passwords[0].value)" >> $GITHUB_ENV
+    
+    - name: "docker login"
+      uses: azure/docker-login@v1
+      with:
+        login-server: ${{ env.CONTAINER_REGISTRY }}
+        username: ${{ env.REGISTRY_USERNAME }}
+        password: ${{ env.REGISTRY_PASSWORD }}
+    
+    - name: "build image resizer api"
+      run: docker build ./imageresizer -t $CONTAINER_REGISTRY/azurefriday/imageresizer:$GITHUB_SHA
+    
+    - name: Scan Image Resizer API Container
+      uses: jldeen/container-scan@master
+      with:
+        image-name: $CONTAINER_REGISTRY/azurefriday/imageresizer:$GITHUB_SHA
+    
+    - name: "push image resizer api"
+      run: docker push $CONTAINER_REGISTRY/azurefriday/imageresizer:$GITHUB_SHA
