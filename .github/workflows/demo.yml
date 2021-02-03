@@ -67,6 +67,22 @@ jobs:
           -s $sql_server_name \
           -g $resourceGroup \
           -e Basic -c 5 --no-wait
+    
+    # Create storage account
+    - name: "Create storage account"
+      run: |
+        az storage account create \
+          -n $storage_account_name \
+          -g $resourceGroup \
+          --sku Premium_LRS \
+          --kind FileStorage
+          
+        storage_account_key=$(az storage account keys list --account-name $storage_account_name -g $resourceGroup --query '[0].value' -o tsv)
+        
+        az storage share create \
+          --account-name $storage_account_name \
+          --account-key $storage_account_key \
+          --name images
         
   build:
     name: Build / Push to ACR
@@ -155,6 +171,8 @@ jobs:
 
           echo "sql_server_fqdn=$(az sql server show -n $sql_server_name -g $resourceGroup -o tsv --query fullyQualifiedDomainName)" >> $GITHUB_ENV
 
+          echo "storage_account_key=$(az storage account keys list --account-name $storage_account_name -g $resourceGroup --query '[0].value' -o tsv)" >> $GITHUB_ENV
+
       - name: 'Deploy Dashboard to Azure Container Instances'
         uses: 'azure/aci-deploy@v1'
         with:
@@ -185,7 +203,7 @@ jobs:
           environment-variables: SQL_SERVER_FQDN=${{ env.sql_server_fqdn }} SQL_SERVER_DB=${{ env.sql_db_name }}
           secure-environment-variables: SQL_SERVER_USERNAME=${{ SECRETS.SQL_USER }} SQL_SERVER_PASSWORD=${{ SECRETS.SQL_PASSWORD }}
       
-      - name: 'Deploy Api to Azure Container Instances'
+      - name: 'Deploy Image Resizer to ACI'
         uses: 'azure/aci-deploy@v1'
         with:
           resource-group: ${{ env.resourceGroup }}
@@ -197,3 +215,7 @@ jobs:
           registry-password: ${{ env.REGISTRY_PASSWORD }}
           location: ${{ env.location }}
           ports: 80
+          azure-file-volume-share-name: images
+          azure-file-volume-account-name: $storage_account_name
+          azure-file-volume-account-key: ${{ env.storage_account_key }}
+          azure-file-volume-mount-path: /app/tmp
