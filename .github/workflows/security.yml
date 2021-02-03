@@ -1,4 +1,4 @@
-name: Azure Friday Demo
+name: Azure Container Scan Test
 
 on: [push, workflow_dispatch]
 
