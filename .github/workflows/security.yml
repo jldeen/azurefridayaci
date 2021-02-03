@@ -59,7 +59,7 @@ jobs:
       run: docker build ./imageresizer -t $CONTAINER_REGISTRY/azurefriday/imageresizer:$GITHUB_SHA
     
     - name: Scan Image Resizer API Container
-      uses: jldeen/container-scan@master
+      uses: jldeen/container-scan@main
       with:
         image-name: $CONTAINER_REGISTRY/azurefriday/imageresizer:$GITHUB_SHA
     

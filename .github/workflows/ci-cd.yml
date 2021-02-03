@@ -32,6 +32,9 @@ env:
   appgw_pip_name: appgw-pip
   appgw_pip_dns: appgw-jldhd
 
+  # storage
+  storage_account_name: acijdimgresfq3snhzfq
+
   # aci
   aci_name: jdaci
   aci_name_prefix: jdapi
