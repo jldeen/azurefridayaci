@@ -107,7 +107,7 @@ jobs:
       run: docker build ./dash -t $CONTAINER_REGISTRY/azurefriday/dash:$GITHUB_SHA
     
     - name: "build image resizer api"
-      run: docker build ./imageResizer -t $CONTAINER_REGISTRY/azurefriday/imageResizer:$GITHUB_SHA
+      run: docker build ./imageresizer -t $CONTAINER_REGISTRY/azurefriday/imageresizer:$GITHUB_SHA
     
     # - name: Scan API Container
     #   uses: azure/container-scan@v0
@@ -126,7 +126,7 @@ jobs:
       run: docker push $CONTAINER_REGISTRY/azurefriday/dash:$GITHUB_SHA
     
     - name: "push image resizer api"
-      run: docker push $CONTAINER_REGISTRY/azurefriday/imageResizer:$GITHUB_SHA
+      run: docker push $CONTAINER_REGISTRY/azurefriday/imageresizer:$GITHUB_SHA
 
   deployStaging:
     name: (Staging) Deploy Azure Container Instances
@@ -191,7 +191,7 @@ jobs:
           resource-group: ${{ env.resourceGroup }}
           name: ${{ env.image_name }}
           dns-name-label: ${{ env.image_name }}
-          image: ${{ env.CONTAINER_REGISTRY }}/azurefriday/imageResizer:${{ github.sha }}
+          image: ${{ env.CONTAINER_REGISTRY }}/azurefriday/imageresizer:${{ github.sha }}
           registry-login-server: ${{ env.CONTAINER_REGISTRY }} 
           registry-username: ${{ env.REGISTRY_USERNAME }}
           registry-password: ${{ env.REGISTRY_PASSWORD }}
