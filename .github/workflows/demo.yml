@@ -22,6 +22,7 @@ env:
   api_name: jdaci
   dash_name: jd-dash
   image_name: jd-image
+  TRIVY_TIMEOUT_SEC: 360s 
 
 jobs:
   deployInfra:
@@ -122,10 +123,10 @@ jobs:
     - name: "build image resizer api"
       run: docker build ./imageresizer -t $CONTAINER_REGISTRY/azurefriday/imageresizer:$GITHUB_SHA
     
-    # - name: Scan Image Resizer API Container
-    #   uses: azure/container-scan@v0
-    #   with:
-    #     image-name: $CONTAINER_REGISTRY/azurefriday/imageresizer:$GITHUB_SHA
+    - name: Scan Image Resizer API Container
+      uses: azure/container-scan@v0
+      with:
+        image-name: $CONTAINER_REGISTRY/azurefriday/imageresizer:$GITHUB_SHA
     
     - name: "push image resizer api"
       run: docker push $CONTAINER_REGISTRY/azurefriday/imageresizer:$GITHUB_SHA
