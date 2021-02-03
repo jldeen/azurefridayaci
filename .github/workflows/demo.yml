@@ -106,8 +106,8 @@ jobs:
     - name: "build dash container"
       run: docker build ./dash -t $CONTAINER_REGISTRY/azurefriday/dash:$GITHUB_SHA
     
-    - name: "build text analytics api"
-      run: docker build ./textApi -t $CONTAINER_REGISTRY/azurefriday/textApi:$GITHUB_SHA
+    - name: "build image resizer api"
+      run: docker build ./imageResizer -t $CONTAINER_REGISTRY/azurefriday/imageResizer:$GITHUB_SHA
     
     # - name: Scan API Container
     #   uses: azure/container-scan@v0
@@ -197,4 +197,3 @@ jobs:
           registry-password: ${{ env.REGISTRY_PASSWORD }}
           location: ${{ env.location }}
           ports: 5000
-          

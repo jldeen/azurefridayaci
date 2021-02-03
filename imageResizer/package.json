@@ -1,0 +1,25 @@
+{
+  "name": "img-resizer",
+  "version": "1.0.0",
+  "description": "",
+  "main": "app.js",
+  "scripts": {
+    "start": "node src/app.js",
+    "test": "mocha test"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "filed": "^0.2.1",
+    "image-download": "1.3.0",
+    "md5": "^2.3.0",
+    "mime": "^2.5.0",
+    "node-gyp": "^7.1.2",
+    "restify": "^8.5.1",
+    "sharp": "^0.27.1",
+    "util": "^0.12.3"
+  },
+  "devDependencies": {
+    "mocha": "^8.2.1"
+  }
+}
