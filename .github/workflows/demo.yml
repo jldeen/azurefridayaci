@@ -18,7 +18,7 @@ env:
   # aci
   api_name: jdaci
   dash_name: jd-dash
-  aci_name: jd-text
+  image_name: jd-image
 
 jobs:
   deployInfra:
@@ -125,8 +125,8 @@ jobs:
     - name: "push dashboard"
       run: docker push $CONTAINER_REGISTRY/azurefriday/dash:$GITHUB_SHA
     
-    - name: "push text api"
-      run: docker push $CONTAINER_REGISTRY/azurefriday/textApi:$GITHUB_SHA
+    - name: "push image resizer api"
+      run: docker push $CONTAINER_REGISTRY/azurefriday/imageResizer:$GITHUB_SHA
 
   deployStaging:
     name: (Staging) Deploy Azure Container Instances
@@ -189,11 +189,11 @@ jobs:
         uses: 'azure/aci-deploy@v1'
         with:
           resource-group: ${{ env.resourceGroup }}
-          name: ${{ env.aci_name }}
-          dns-name-label: ${{ env.aci_name }}
-          image: ${{ env.CONTAINER_REGISTRY }}/azurefriday/api:${{ github.sha }}
+          name: ${{ env.image_name }}
+          dns-name-label: ${{ env.image_name }}
+          image: ${{ env.CONTAINER_REGISTRY }}/azurefriday/imageResizer:${{ github.sha }}
           registry-login-server: ${{ env.CONTAINER_REGISTRY }} 
           registry-username: ${{ env.REGISTRY_USERNAME }}
           registry-password: ${{ env.REGISTRY_PASSWORD }}
           location: ${{ env.location }}
-          ports: 5000
+          ports: 80
