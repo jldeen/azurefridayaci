@@ -21,8 +21,7 @@ env:
   # aci
   api_name: jdaci
   dash_name: jd-dash
-  image_name: jd-image
-  TRIVY_TIMEOUT_SEC: 360s 
+  image_name: jd-image 
 
 jobs:      
   build:
