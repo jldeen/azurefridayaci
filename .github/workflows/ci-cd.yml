@@ -261,26 +261,26 @@ jobs:
         password: ${{ env.REGISTRY_PASSWORD }}
 
     - name: "build api container"
-      run: docker build ./api -t $CONTAINER_REGISTRY/azurefriday/api:$GITHUB_SHA
+      run: docker build ./api -t $CONTAINER_REGISTRY/azurefriday/api:${{ github.sha }}
 
     - name: "build dash container"
-      run: docker build ./dash -t $CONTAINER_REGISTRY/azurefriday/dash:$GITHUB_SHA
+      run: docker build ./dash -t $CONTAINER_REGISTRY/azurefriday/dash:${{ github.sha }}
     
     # - name: Scan API Container
     #   uses: azure/container-scan@v0
     #   with:
-    #     image-name: $CONTAINER_REGISTRY/azurefriday/api:$GITHUB_SHA
+    #     image-name: $CONTAINER_REGISTRY/azurefriday/api:${{ github.sha }}
     
     # - name: Scan Dashboard Container
     #   uses: azure/container-scan@v0
     #   with:
-    #     image-name: $CONTAINER_REGISTRY/azurefriday/dash:$GITHUB_SHA
+    #     image-name: $CONTAINER_REGISTRY/azurefriday/dash:${{ github.sha }}
 
     - name: "push api"
-      run: docker push $CONTAINER_REGISTRY/azurefriday/api:$GITHUB_SHA
+      run: docker push $CONTAINER_REGISTRY/azurefriday/api:${{ github.sha }}
 
     - name: "push dashboard"
-      run: docker push $CONTAINER_REGISTRY/azurefriday/dash:$GITHUB_SHA
+      run: docker push $CONTAINER_REGISTRY/azurefriday/dash:${{ github.sha }}
 
   deployStaging:
     name: (Staging) Deploy Azure Container Instances
@@ -335,7 +335,7 @@ jobs:
 
           sed -i "s|<SQL_SERVER_PASSWORD>|${{ SECRETS.SQL_PASSWORD }}|g" IaC/dev.yaml && echo "sql server password added"
 
-          sed -i "s|<GIT_SHA>|$GITHUB_SHA|g" IaC/dev.yaml && echo "github sha added"
+          sed -i "s|<GIT_SHA>|${{ github.sha }}|g" IaC/dev.yaml && echo "github sha added"
       
       - name: "Deploy Observability Dashboard"
         run: |
@@ -345,7 +345,7 @@ jobs:
           az container create \
             -n $dash_name \
             -g $resourceGroup \
-            --image $CONTAINER_REGISTRY/azurefriday/dash:$GITHUB_SHA \
+            --image $CONTAINER_REGISTRY/azurefriday/dash:${{ github.sha }} \
             --vnet $vnet_id \
             --subnet $subnet_id \
             --ip-address private \
@@ -475,7 +475,7 @@ jobs:
 
           sed -i "s|<SQL_SERVER_PASSWORD>|${{ SECRETS.SQL_PASSWORD }}|g" IaC/dev.yaml && echo "sql server password added"
 
-          sed -i "s|<GIT_SHA>|$GITHUB_SHA|g" IaC/dev.yaml && echo "github sha added"
+          sed -i "s|<GIT_SHA>|${{ github.sha }}|g" IaC/dev.yaml && echo "github sha added"
       
       - name: "ACI API and Web Group Deploy"
         run: az container create -g $resourceGroup --file IaC/dev.yaml --no-wait

@@ -1,6 +1,7 @@
 name: Azure Container Scan Test
 
-on: [push, workflow_dispatch]
+# on: [push, workflow_dispatch]
+on: [workflow_dispatch]
 
 env:
   # basic  
@@ -56,12 +57,12 @@ jobs:
         password: ${{ env.REGISTRY_PASSWORD }}
     
     - name: "build image resizer api"
-      run: docker build ./imageresizer -t $CONTAINER_REGISTRY/azurefriday/imageresizer:$GITHUB_SHA
+      run: docker build ./imageresizer -t $CONTAINER_REGISTRY/azurefriday/imageresizer:${{ github.sha }}
     
     # - name: Scan Image Resizer API Container
     #   uses: jldeen/container-scan@v1
     #   with:
-    #     image-name: $CONTAINER_REGISTRY/azurefriday/imageresizer:$GITHUB_SHA
+    #     image-name: $CONTAINER_REGISTRY/azurefriday/imageresizer:${{ github.sha }}
 
     - name: Scan Image Resizer API Container
       uses: jldeen/container-scan@releases/v1
@@ -69,4 +70,4 @@ jobs:
         image-name: ${{ env.CONTAINER_REGISTRY }}/azurefriday/imageresizer:${{ github.sha }}
     
     - name: "push image resizer api"
-      run: docker push $CONTAINER_REGISTRY/azurefriday/imageresizer:$GITHUB_SHA
+      run: docker push $CONTAINER_REGISTRY/azurefriday/imageresizer:${{ github.sha }}
