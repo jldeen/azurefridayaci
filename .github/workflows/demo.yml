@@ -23,7 +23,6 @@ env:
   api_name: jdaci
   dash_name: jd-dash
   image_name: jd-image
-  TRIVY_TIMEOUT_SEC: 360s 
 
 jobs:
   deployInfra:
@@ -68,19 +67,17 @@ jobs:
           --kind FileStorage
           
         storage_account_key=$(az storage account keys list --account-name $storage_account_name -g $resourceGroup --query '[0].value' -o tsv)
-        echo "storage_account_key=$(az storage account keys list --account-name $storage_account_name -g $resourceGroup --query '[0].value' -o tsv)" >> $GITHUB_ENV
+
+        curl \
+          -X PUT \
+          -H "Accept: application/vnd.github.v3+json" \
+          https://api.github.com/repos/jldeen/azurefridayaci/actions/secrets/storage_account_key \
+          -d '{"encrypted_value":"$storage_account_key"}'
         
         az storage share create \
           --account-name $storage_account_name \
           --account-key $storage_account_key \
           --name images
-    
-    - uses: hmanzur/actions-set-secret@2.0.2
-      with:
-        name: storage_account_key
-        value: ${{ env.storage_account_key }}
-        repository: hmanzur/actions-set-secret
-        token: ${{ secrets.REPO_ACCESS_TOKEN }}
         
   build:
     name: Build / Push to ACR
