@@ -1,0 +1,40 @@
+name: Stale PR Image Clean up
+
+on:
+  schedule:
+    - cron: "10 13 * * *"
+    
+env:
+  # storage
+  storage_account_name: acijdimgresfq3snhzfq
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Setup Environment"
+        run: |
+          storage_account_key=$(az storage account keys list --account-name $storage_account_name -g $resourceGroup --query '[0].value' -o tsv)
+          echo "storage_account_key=$(az storage account keys list --account-name $storage_account_name -g $resourceGroup --query '[0].value' -o tsv)" >> $GITHUB_ENV
+          
+      - name: "Stale Bot"
+        uses: actions/stale@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          stale-issue-message: 'This issue is stale because it has been open 30 days with no activity. Remove stale label or comment or this will be closed in 5 days.'
+          stale-pr-message: 'This pr is stale because it has been open 45 days with no activity. Remove stale label or comment or this will be closed in 10 days.'
+          close-issue-message: 'This issue was closed because it has been stalled for 5 days with no activity.'
+          exempt-issue-milestones: 'future,alpha,beta'
+          exempt-pr-milestones: 'bugfix,improvement'
+          days-before-issue-stale: 30
+          days-before-pr-stale: 45
+          days-before-issue-close: 5
+          days-before-pr-close: 10
+
+      - name: Delete PR Image clean up
+        run: |
+          az storage file delete-batch \
+            --account-key $storage_account_key \
+            --account-name $storage_account_name \
+            --pattern * \
+            --source pr-images 
