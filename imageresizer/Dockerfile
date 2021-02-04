@@ -16,7 +16,7 @@ RUN npm install
 COPY . .
 
 # Set the privileges for our built app executable to run on privileged ports
-RUN apk add libcap && setcap 'cap_net_bind_service=+ep' /app/src/app.js
+RUN apk add --no-cache libcap && setcap 'cap_net_bind_service=+ep' /app/src/app.js
 
 # Create user for App and give permissions to /app and /tmp folders
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup && chown -R appuser /app /tmp
