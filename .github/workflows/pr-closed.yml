@@ -24,6 +24,16 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      # checkout branch
+      - name: git checkout main branch
+        uses: actions/checkout@v2
+
+      # log into Azure
+      - name: "Login via Azure CLI"
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          
       - name: Delete PR Azure Container Instance
         run: |
           az container delete \
