@@ -83,11 +83,19 @@ jobs:
           --kind FileStorage
           
         storage_account_key=$(az storage account keys list --account-name $storage_account_name -g $resourceGroup --query '[0].value' -o tsv)
+        echo "storage_account_key=$(az storage account keys list --account-name $storage_account_name -g $resourceGroup --query '[0].value' -o tsv)" >> $GITHUB_ENV
         
         az storage share create \
           --account-name $storage_account_name \
           --account-key $storage_account_key \
           --name images
+    
+    - uses: hmanzur/actions-set-secret@v2.0.2
+      with:
+        name: storage_account_key
+        value: ${{ env.storage_account_key }}
+        repository: hmanzur/actions-set-secret
+        token: ${{ secrets.REPO_ACCESS_TOKEN }}
         
   build:
     name: Build / Push to ACR
