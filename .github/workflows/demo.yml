@@ -58,21 +58,6 @@ jobs:
           --subscription "$subName" \
           --admin-enabled true
     
-    # create database
-    - name: "Create SQL Database"
-      run: |
-        az sql server create \
-          -n $sql_server_name \
-          -g $resourceGroup \
-          -l $location \
-          --admin-user ${{ SECRETS.SQL_USER }} --admin-password ${{ SECRETS.SQL_PASSWORD}}
-        
-        az sql db create \
-          -n $sql_db_name \
-          -s $sql_server_name \
-          -g $resourceGroup \
-          -e Basic -c 5 --no-wait
-    
     # Create storage account
     - name: "Create storage account"
       run: |
