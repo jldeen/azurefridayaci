@@ -75,7 +75,7 @@ jobs:
           --kind FileStorage
         
         storage_account_key=$(az storage account keys list --account-name $storage_account_name -g $resourceGroup --query '[0].value' -o tsv)
-        echo "storage_account_key=$(az storage account keys list --account-name $storage_account_name -g $resourceGroup --query '[0].value' -o tsv)" > $GITHUB_ENV
+        echo "storage_account_key=$(az storage account keys list --account-name $storage_account_name -g $resourceGroup --query '[0].value' -o tsv)" >> $GITHUB_ENV
 
         az storage share create \
           --account-name $storage_account_name \
