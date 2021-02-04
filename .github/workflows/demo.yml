@@ -87,7 +87,7 @@ jobs:
       with:
         keyvault: ${{ env.keyvault_name }}
         secrets: ${{ env.storage_account_key }}  # comma separated list of secret keys that need to be fetched from the Key Vault 
-      id: createStorageAccountKey
+      id: storageAccountKey
     
   build:
     name: Build / Push to ACR
