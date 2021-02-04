@@ -1,5 +1,8 @@
 FROM node:alpine
 
+# Need for privileged ports
+RUN apk add --no-cache libcap
+
 # Create app directory
 WORKDIR app
 
@@ -16,7 +19,7 @@ RUN npm install
 COPY . .
 
 # Set the privileges for our built app executable to run on privileged ports
-RUN apk add --no-cache libcap && setcap 'cap_net_bind_service=+ep' /app/src/app.js
+RUN setcap 'cap_net_bind_service=+ep' /usr/local/bin/node
 
 # Create user for App and give permissions to /app and /tmp folders
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup && chown -R appuser /app /tmp
