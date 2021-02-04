@@ -89,6 +89,11 @@ jobs:
           --account-name $storage_account_name \
           --account-key $storage_account_key \
           --name images
+
+        az storage share create \
+          --account-name $storage_account_name \
+          --account-key $storage_account_key \
+          --name pr-images
     
     # - name: "Store Storage Account Key in Azure KeyVault"
     #   uses: Azure/get-keyvault-secrets@v1.0
