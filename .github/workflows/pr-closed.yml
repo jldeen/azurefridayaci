@@ -28,4 +28,4 @@ jobs:
         run: |
           az container delete \
             -g $resourceGroup \
-            -n $pr_image_name
+            -n $pr_image_name -y
