@@ -17,7 +17,7 @@ describe('Test image file download and resize', function() {
 
         const downloadedFileName = await downloader.download(params.url, fileName);
 
-        const downloadedFilePath = "./tmp/" + downloadedFileName;
+        const downloadedFilePath = "./images/originals/" + downloadedFileName;
 
         const resizedFileName = await resizer.resize(downloadedFilePath, params);
         assert(resizedFileName.length > 0);

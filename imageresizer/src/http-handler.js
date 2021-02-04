@@ -13,8 +13,8 @@ async function resizeImage(req, res, next) {
     const fileName = paramHelper.getFileName(params);
     const resizedFileName = paramHelper.getResizedFileName(params);
 
-    const originalFilePath = './tmp/' + fileName;
-    const resizedFilePath = './tmp/' + resizedFileName;
+    const originalFilePath = './images/originals/' + fileName;
+    const resizedFilePath = './images/' + resizedFileName;
 
     try{
 

@@ -7,7 +7,7 @@ const deleteFile = util.promisify(fs.unlink);
 const getFiles = util.promisify(fs.readdir);
 
 const MaxDeleteItemsAtATime = 500;
-const folderPath = './tmp/';
+const folderPath = './images/originals/';
 
 
 async function runCacheCleanupTask(){

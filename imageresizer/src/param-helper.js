@@ -1,15 +1,14 @@
-const md5 = require('md5');
 const config = require('../config');
 
 function getFileName(params){
-    var urlHash = md5(params.url);
+    var urlImageName = (params.url).split('/').pop();
 
-    return urlHash;
+    return urlImageName;
 }
 
 function getResizedFileName(params){
-    var urlHash = md5(params.url);
-    var fileName = urlHash + '_' + params.height + '_' + params.width + "." + params.format;
+    var urlImageName = (params.url).split("/").pop().split(".")[0];
+    var fileName = urlImageName + '_' + params.height + '_' + params.width + "." + params.format;
 
     return fileName;
 }
