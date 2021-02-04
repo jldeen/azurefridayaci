@@ -118,8 +118,8 @@ jobs:
       uses: azure/docker-login@v1
       with:
         login-server: ${{ env.CONTAINER_REGISTRY }}
-        username: ${{ SECRETS.REGISTRY_USERNAME }}
-        password: ${{ SECRETS.REGISTRY_PASSWORD }}
+        username: ${{ env.REGISTRY_USERNAME }}
+        password: ${{ env.REGISTRY_PASSWORD }}
     
     - name: "build image resizer api"
       run: docker build ./imageresizer -t $CONTAINER_REGISTRY/azurefriday/imageresizer:${{ github.sha }}
@@ -169,11 +169,11 @@ jobs:
           dns-name-label: ${{ env.image_name }}
           image: ${{ env.CONTAINER_REGISTRY }}/azurefriday/imageresizer:${{ github.sha }}
           registry-login-server: ${{ env.CONTAINER_REGISTRY }} 
-          registry-username: ${{ SECRETS.REGISTRY_USERNAME }}
-          registry-password: ${{ SECRETS.REGISTRY_PASSWORD }}
+          registry-username: ${{ env.REGISTRY_USERNAME }}
+          registry-password: ${{ env.REGISTRY_PASSWORD }}
           location: ${{ env.location }}
           ports: 80
           azure-file-volume-share-name: images
           azure-file-volume-account-name: ${{ env.storage_account_name }}
-          azure-file-volume-account-key: ${{ SECRETS.storage_account_key }}
+          azure-file-volume-account-key: ${{ env.storage_account_key }}
           azure-file-volume-mount-path: /app/images
