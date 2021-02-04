@@ -1,7 +1,9 @@
-name: Azure Friday Demo
+name: PRFlow Azure Friday
 
-on: [push, workflow_dispatch]
-# on: [workflow_dispatch]
+on:
+  pull_request:
+    branches:
+      - main
 
 env:
   # basic  
@@ -10,7 +12,6 @@ env:
   subName: "ca-jessde-demo-test"
 
   # app specific
-  acrName: azurefriday21
   prAcrName: azurefridaypr21
   keyvault_name: azurefriday21
 
@@ -18,83 +19,12 @@ env:
   storage_account_name: acijdimgresfq3snhzfq
 
   # aci
-  image_name: jd-image
+  pr_image_name: jd-image-pr
 
 jobs:
-  deployInfra:
-    name: Setup Environment
-    runs-on: ubuntu-latest
-    steps:
-    # checkout branch
-    - name: git checkout main branch
-      uses: actions/checkout@v2
-
-    # log into Azure
-    - name: "Login via Azure CLI"
-      uses: azure/login@v1
-      with:
-        creds: ${{ secrets.AZURE_CREDENTIALS }}
-
-    # create resourceGroup
-    - name: "Create Resource Group and Network vnet"
-      run: |
-        az group create \
-        --subscription "$subName" \
-        --name $resourceGroup \
-        --location $location > /dev/null && echo "Resource Group Created."
-
-    # create azure container registry
-    - name: "Create Azure Container Registries"
-      run: |
-        az acr create \
-          --resource-group $resourceGroup \
-          --name $acrName \
-          --sku Premium \
-          --subscription "$subName" \
-          --admin-enabled true
-
-        az acr create \
-          --resource-group $resourceGroup \
-          --name $prAcrName \
-          --sku Basic \
-          --subscription "$subName" \
-          --admin-enabled true
-    
-    - name: "Create Azure Key Vault"
-      run: |
-        az keyvault create \
-          -n $keyvault_name \
-          -g $resourceGroup \
-          -l $location 
-    
-    # Create storage account
-    - name: "Create storage account"
-      run: |
-        az storage account create \
-          -n $storage_account_name \
-          -g $resourceGroup \
-          --sku Premium_LRS \
-          --kind FileStorage
-        
-        storage_account_key=$(az storage account keys list --account-name $storage_account_name -g $resourceGroup --query '[0].value' -o tsv)
-        echo "storage_account_key=$(az storage account keys list --account-name $storage_account_name -g $resourceGroup --query '[0].value' -o tsv)" >> $GITHUB_ENV
-
-        az storage share create \
-          --account-name $storage_account_name \
-          --account-key $storage_account_key \
-          --name images
-    
-    - name: "Store Storage Account Key in Azure KeyVault"
-      uses: Azure/get-keyvault-secrets@v1.0
-      with:
-        keyvault: ${{ env.keyvault_name }}
-        secrets: ${{ env.storage_account_key }}  # comma separated list of secret keys that need to be fetched from the Key Vault 
-      id: storageAccountKey
-    
   build:
     name: Build / Push to ACR
     runs-on: ubuntu-latest
-    needs: deployInfra
     steps:
     # checkout branch
     - name: git checkout main branch
@@ -109,12 +39,12 @@ jobs:
     - name: "Get ACR Container Information"
       run: |
         echo "Retrieving Container Registry info..."
-        acrName=$(az acr list -g $resourceGroup -o tsv --query [0].name)
+        prAcrName=$(az acr list -g $resourceGroup -o tsv --query [0].name)
         CONTAINER_REGISTRY=$(az acr list -g $resourceGroup -o tsv --query [0].loginServer)
         # acr/container registry variables
         echo "CONTAINER_REGISTRY=$(az acr list -g $resourceGroup -o tsv --query [0].loginServer)" >> $GITHUB_ENV
-        echo "REGISTRY_USERNAME=$(az acr credential show -n $acrName --query username -o tsv)" >> $GITHUB_ENV
-        echo "REGISTRY_PASSWORD=$(az acr credential show -n $acrName -o tsv --query passwords[0].value)" >> $GITHUB_ENV
+        echo "REGISTRY_USERNAME=$(az acr credential show -n $prAcrName --query username -o tsv)" >> $GITHUB_ENV
+        echo "REGISTRY_PASSWORD=$(az acr credential show -n $prAcrName -o tsv --query passwords[0].value)" >> $GITHUB_ENV
     
     - name: "docker login"
       uses: azure/docker-login@v1
@@ -152,12 +82,12 @@ jobs:
       - name: "Get ACR Container Information"
         run: |
           echo "Retrieving Container Registry info..."
-          acrName=$(az acr list -g $resourceGroup -o tsv --query [0].name)
+          prAcrName=$(az acr list -g $resourceGroup -o tsv --query [0].name)
           CONTAINER_REGISTRY=$(az acr list -g $resourceGroup -o tsv --query [0].loginServer)
           # acr/container registry variables
           echo "CONTAINER_REGISTRY=$(az acr list -g $resourceGroup -o tsv --query [0].loginServer)" >> $GITHUB_ENV
-          echo "REGISTRY_USERNAME=$(az acr credential show -n $acrName --query username -o tsv)" >> $GITHUB_ENV
-          echo "REGISTRY_PASSWORD=$(az acr credential show -n $acrName -o tsv --query passwords[0].value)" >> $GITHUB_ENV
+          echo "REGISTRY_USERNAME=$(az acr credential show -n $prAcrName --query username -o tsv)" >> $GITHUB_ENV
+          echo "REGISTRY_PASSWORD=$(az acr credential show -n $prAcrName -o tsv --query passwords[0].value)" >> $GITHUB_ENV
 
           echo "sql_server_fqdn=$(az sql server show -n $sql_server_name -g $resourceGroup -o tsv --query fullyQualifiedDomainName)" >> $GITHUB_ENV
 
@@ -167,8 +97,8 @@ jobs:
         uses: 'azure/aci-deploy@v1'
         with:
           resource-group: ${{ env.resourceGroup }}
-          name: ${{ env.image_name }}
-          dns-name-label: ${{ env.image_name }}
+          name: ${{ env.pr_image_name }}-${{github.event.number}}
+          dns-name-label: ${{ env.pr_image_name }}-${{github.event.number}}
           image: ${{ env.CONTAINER_REGISTRY }}/azurefriday/imageresizer:${{ github.sha }}
           registry-login-server: ${{ env.CONTAINER_REGISTRY }} 
           registry-username: ${{ env.REGISTRY_USERNAME }}
