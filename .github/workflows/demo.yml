@@ -1,7 +1,13 @@
 name: Azure Friday Demo
 
-on: [push, workflow_dispatch]
-# on: [workflow_dispatch]
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    
+
+# add in on main branch only
 
 env:
   # basic  
