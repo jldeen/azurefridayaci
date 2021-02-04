@@ -90,7 +90,7 @@ jobs:
           --account-key $storage_account_key \
           --name images
     
-    - uses: hmanzur/actions-set-secret@v2.0.2
+    - uses: hmanzur/actions-set-secret@2.0.2
       with:
         name: storage_account_key
         value: ${{ env.storage_account_key }}
