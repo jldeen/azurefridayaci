@@ -3,8 +3,7 @@ name: Azure Friday Demo
 on:
   push:
     branches:
-      - '*'
-      - '!master'
+      - main
   workflow_dispatch:
     
 
