@@ -168,7 +168,7 @@ jobs:
     #     image-name: ${{ secrets.CONTAINER_REGISTRY }}/azurefriday/image-resizer:$GITHUB_SHA
     
     - name: "push image resizer api"
-      run: docker push ${{ secrets.CONTAINER_REGISTRY }}/azurefriday/image-resizer:$GITHUB_SHA
+      run: docker push ${{ secrets.CONTAINER_REGISTRY }}/azurefriday/imageresizer:${{ github.sha }}
 
   # deploy:
   #   name: Deploy to ACI
