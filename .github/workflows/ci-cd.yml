@@ -159,8 +159,8 @@ jobs:
     - name: Scan Image Resizer API Container
       uses: jldeen/container-scan@releases/v1
       with:
-        # image-name: ${{ secrets.CONTAINER_REGISTRY }}/azurefriday/imageresizer:${{ github.sha }}
-        image-name: ${{ secrets.CONTAINER_REGISTRY }}/azurefriday/image-resizer:$GITHUB_SHA
+        image-name: ${{ secrets.CONTAINER_REGISTRY }}/azurefriday/imageresizer:${{ github.sha }}
+        # image-name: ${{ secrets.CONTAINER_REGISTRY }}/azurefriday/image-resizer:$GITHUB_SHA
 
     # - name: Scan Image Resizer API Container
     #   uses: Azure/container-scan@releases/v0
