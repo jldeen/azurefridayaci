@@ -3,7 +3,7 @@ name: Azure Friday Demo
 on:
   push:
     branches:
-      - main
+      - pr-test
   workflow_dispatch:
     
 
@@ -157,41 +157,41 @@ jobs:
       run: docker build ./imageresizer -t ${{ secrets.CONTAINER_REGISTRY }}/azurefriday/imageresizer:${{ github.sha }}
     
     - name: Scan Image Resizer API Container
-      uses: jldeen/container-scan@releases/v1
+      uses: Azure/container-scan@releases/v1
       with:
         image-name: ${{ secrets.CONTAINER_REGISTRY }}/azurefriday/imageresizer:${{ github.sha }}
     
     - name: "push image resizer api"
       run: docker push ${{ secrets.CONTAINER_REGISTRY }}/azurefriday/imageresizer:${{ github.sha }}
 
-  deploy:
-    name: Deploy to ACI
-    runs-on: ubuntu-latest
-    needs: build
-    steps:
-      # checkout branch
-      - name: git checkout main branch
-        uses: actions/checkout@v2
+  # deploy:
+  #   name: Deploy to ACI
+  #   runs-on: ubuntu-latest
+  #   needs: build
+  #   steps:
+  #     # checkout branch
+  #     - name: git checkout main branch
+  #       uses: actions/checkout@v2
 
-      # log into Azure
-      - name: "Login via Azure CLI"
-        uses: azure/login@v1
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+  #     # log into Azure
+  #     - name: "Login via Azure CLI"
+  #       uses: azure/login@v1
+  #       with:
+  #         creds: ${{ secrets.AZURE_CREDENTIALS }}
       
-      - name: 'Create Image Resizer in ACI'
-        uses: 'azure/aci-deploy@v1'
-        with:
-          resource-group: ${{ env.resourceGroup }}
-          name: ${{ env.image_name }}
-          dns-name-label: ${{ env.image_name }}
-          image: ${{ secrets.CONTAINER_REGISTRY }}/azurefriday/imageresizer:${{ github.sha }}
-          registry-login-server: ${{ secrets.CONTAINER_REGISTRY }}
-          registry-username: ${{ secrets.REGISTRY_USERNAME }}
-          registry-password: ${{ secrets.REGISTRY_PASSWORD }}
-          location: ${{ env.location }}
-          ports: 80
-          azure-file-volume-share-name: images
-          azure-file-volume-account-name: ${{ env.storage_account_name }}
-          azure-file-volume-account-key: ${{ secrets.storage_account_key }}
-          azure-file-volume-mount-path: /app/images
+  #     - name: 'Create Image Resizer in ACI'
+  #       uses: 'azure/aci-deploy@v1'
+  #       with:
+  #         resource-group: ${{ env.resourceGroup }}
+  #         name: ${{ env.image_name }}
+  #         dns-name-label: ${{ env.image_name }}
+  #         image: ${{ secrets.CONTAINER_REGISTRY }}/azurefriday/imageresizer:${{ github.sha }}
+  #         registry-login-server: ${{ secrets.CONTAINER_REGISTRY }}
+  #         registry-username: ${{ secrets.REGISTRY_USERNAME }}
+  #         registry-password: ${{ secrets.REGISTRY_PASSWORD }}
+  #         location: ${{ env.location }}
+  #         ports: 80
+  #         azure-file-volume-share-name: images
+  #         azure-file-volume-account-name: ${{ env.storage_account_name }}
+  #         azure-file-volume-account-key: ${{ secrets.storage_account_key }}
+  #         azure-file-volume-mount-path: /app/images
