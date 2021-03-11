@@ -154,15 +154,15 @@ jobs:
         password: ${{ secrets.REGISTRY_PASSWORD }}
     
     - name: "build image resizer api"
-      run: docker build ./imageresizer -t ${{ secrets.CONTAINER_REGISTRY }}/azurefriday/imageresizer:${{ github.sha }}
+      run: docker build ./imageresizer -t ${{ secrets.CONTAINER_REGISTRY }}/azurefriday/image-resizer:${{ github.sha }}
     
     - name: Scan Image Resizer API Container
       uses: jldeen/container-scan@releases/v1
       with:
-        image-name: ${{ secrets.CONTAINER_REGISTRY }}/azurefriday/imageresizer:${{ github.sha }}
+        image-name: ${{ secrets.CONTAINER_REGISTRY }}/azurefriday/image-resizer:${{ github.sha }}
     
     - name: "push image resizer api"
-      run: docker push ${{ secrets.CONTAINER_REGISTRY }}/azurefriday/imageresizer:${{ github.sha }}
+      run: docker push ${{ secrets.CONTAINER_REGISTRY }}/azurefriday/image-resizer:${{ github.sha }}
 
   # deploy:
   #   name: Deploy to ACI
