@@ -22,7 +22,7 @@ COPY . .
 RUN setcap 'cap_net_bind_service=+ep' /usr/local/bin/node
 
 # Create user for App and give permissions to /app and /tmp folders
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup && chown -R appuser /app /images
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup && chown -R appuser /app /tmp
 USER appuser
 
 EXPOSE 80
