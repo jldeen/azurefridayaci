@@ -3,7 +3,7 @@ name: Azure Friday Demo
 on:
   push:
     branches:
-      - pr-test
+      - main
   workflow_dispatch:
     
 
